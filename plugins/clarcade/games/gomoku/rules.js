@@ -1,19 +1,22 @@
-const BOARD_LIMIT = 100
-const VIEW_PADDING = 3
+export const BOARD_SIZE = 15
+export const LEGACY_BOARD_SIZE = 201
 const WIN_LENGTH = 5
 const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]]
 export const DEFAULT_RULESET = 'freestyle'
 export const validRuleset = value => value === DEFAULT_RULESET || value === 'vn'
+export const validBoardSize = value => value === BOARD_SIZE || value === LEGACY_BOARD_SIZE
+export const validCoordinate = (value, boardSize = BOARD_SIZE) =>
+  Number.isInteger(value) && Math.abs(value) <= (boardSize - 1) / 2
 
 export function applyMove(state, { x, y, mark }) {
+  const { boardSize = BOARD_SIZE } = state
   if (state.turn === null) {
     return { ok: false, reason: 'finished' }
   }
   if (mark !== state.turn) {
     return { ok: false, reason: 'wrong-turn' }
   }
-  if (!Number.isInteger(x) || !Number.isInteger(y) ||
-      Math.abs(x) > BOARD_LIMIT || Math.abs(y) > BOARD_LIMIT) {
+  if (!validCoordinate(x, boardSize) || !validCoordinate(y, boardSize)) {
     return { ok: false, reason: 'invalid-coordinates' }
   }
   if (state.board.size === 0 && (x !== 0 || y !== 0)) {
@@ -27,16 +30,16 @@ export function applyMove(state, { x, y, mark }) {
 
   const board = new Map(state.board)
   board.set(key, mark)
-  const winLine = findWinLine(board, { x, y }, state.ruleset)
+  const winLine = findWinLine(board, { x, y }, state.ruleset, boardSize)
   const nextTurn = mark === 'X' ? 'O' : 'X'
 
   return {
     ok: true,
-    state: { ...state, board, turn: winLine ? null : nextTurn, winLine },
+    state: { ...state, board, turn: winLine || board.size === boardSize ** 2 ? null : nextTurn, winLine },
   }
 }
 
-export function findWinLine(board, { x, y }, ruleset = DEFAULT_RULESET) {
+export function findWinLine(board, { x, y }, ruleset = DEFAULT_RULESET, boardSize = BOARD_SIZE) {
   if (!validRuleset(ruleset)) {
     throw new RangeError(`Unsupported Gomoku ruleset: ${ruleset}`)
   }
@@ -51,18 +54,18 @@ export function findWinLine(board, { x, y }, ruleset = DEFAULT_RULESET) {
     if (before.length + after.length + 1 < WIN_LENGTH) continue
     const opponent = mark === 'X' ? 'O' : 'X'
     if (ruleset === 'vn' &&
-        blockedEnd(board, x, y, -dx, -dy, before.length + 1, opponent) &&
-        blockedEnd(board, x, y, dx, dy, after.length + 1, opponent)) continue
+        blockedEnd(board, x, y, -dx, -dy, before.length + 1, opponent, boardSize) &&
+        blockedEnd(board, x, y, dx, dy, after.length + 1, opponent, boardSize)) continue
     return [...before.reverse(), { x, y }, ...after]
   }
 
   return null
 }
 
-function blockedEnd(board, x, y, dx, dy, distance, opponent) {
+function blockedEnd(board, x, y, dx, dy, distance, opponent, boardSize) {
   const endX = x + dx * distance
   const endY = y + dy * distance
-  return Math.abs(endX) <= BOARD_LIMIT && Math.abs(endY) <= BOARD_LIMIT &&
+  return validCoordinate(endX, boardSize) && validCoordinate(endY, boardSize) &&
     board.get(`${endX},${endY}`) === opponent
 }
 
@@ -80,28 +83,7 @@ function matchingNeighbors(board, x, y, dx, dy, mark) {
   return cells
 }
 
-export function bounds(board) {
-  let minX = Infinity
-  let maxX = -Infinity
-  let minY = Infinity
-  let maxY = -Infinity
-
-  if (board.size === 0) {
-    minX = maxX = minY = maxY = 0
-  }
-
-  for (const key of board.keys()) {
-    const [x, y] = key.split(',').map(Number)
-    minX = Math.min(minX, x)
-    maxX = Math.max(maxX, x)
-    minY = Math.min(minY, y)
-    maxY = Math.max(maxY, y)
-  }
-
-  return {
-    minX: Math.max(-BOARD_LIMIT, minX - VIEW_PADDING),
-    maxX: Math.min(BOARD_LIMIT, maxX + VIEW_PADDING),
-    minY: Math.max(-BOARD_LIMIT, minY - VIEW_PADDING),
-    maxY: Math.min(BOARD_LIMIT, maxY + VIEW_PADDING),
-  }
+export function bounds(boardSize = BOARD_SIZE) {
+  const edge = (boardSize - 1) / 2
+  return { minX: -edge, maxX: edge, minY: -edge, maxY: edge }
 }

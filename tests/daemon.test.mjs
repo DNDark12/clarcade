@@ -124,7 +124,7 @@ test('two real launchers recover one daemon after SIGKILL and retain the lock in
   assert.equal((await host.request('/state')).body.room.port, waiting.port)
 })
 
-test('real guest reconnects by room code after host restarts with a board over 4 KB', { timeout: 45000 }, async t => {
+test('a 15x15 game reconnects with a snapshot over 4 KB and draws on a full board', { timeout: 45000 }, async t => {
   const make = await fixture(t)
   const host = make('host')
   const guest = make('guest')
@@ -132,17 +132,33 @@ test('real guest reconnects by room code after host restarts with a board over 4
   const created = await host.request('/host', { roomName: 'Long game', name: 'An', moveLimit: 200 })
   assert.equal(created.status, 200)
   assert.equal(created.body.room.ruleset, 'freestyle')
+  assert.equal(created.body.room.boardSize, 15)
+  assert.equal(created.body.room.moveLimit, 0)
   const { link, directLink, port } = created.body.room
   const found = await guest.request('/rooms')
   assert(found.body.rooms.some(room => room.roomCode === created.body.room.roomCode))
-  assert.equal((await guest.request('/join', { link, name: 'Binh' })).status, 200)
+  const joined = await guest.request('/join', { link, name: 'Binh' })
+  assert.equal(joined.status, 200)
+  assert.equal(joined.body.room.boardSize, 15)
 
   const opened = (await host.request('/state')).body.room
+  for (const actor of [host, guest]) {
+    assert.equal((await actor.request('/move', { gameId: opened.gameId, moveNo: 1, x: 8, y: 0 })).status, 400)
+  }
+  // Alternate marks in this final pattern without creating a five-stone line in any direction.
+  const xCells = [{ x: 0, y: 0 }]
+  const oCells = []
+  for (let y = -7; y <= 7; y++) {
+    for (let x = -7; x <= 7; x++) {
+      if (x === 0 && y === 0) continue
+      const cells = ((x + 2 * y) & 3) < 2 ? xCells : oCells
+      cells.push({ x, y })
+    }
+  }
+  const moves = xCells.flatMap((cell, index) => index < oCells.length ? [cell, oCells[index]] : [cell])
   for (let index = 0; index < 190; index++) {
     const actor = index % 2 ? guest : host
-    const x = (index % 25) * 2
-    const y = Math.floor(index / 25) * 2
-    const response = await actor.request('/move', { gameId: opened.gameId, moveNo: index + 1, x, y })
+    const response = await actor.request('/move', { gameId: opened.gameId, moveNo: index + 1, ...moves[index] })
     assert.equal(response.status, 200, JSON.stringify(response.body))
   }
   const before = (await host.request('/state')).body.room
@@ -163,17 +179,19 @@ test('real guest reconnects by room code after host restarts with a board over 4
     value.body.room.connection === 'connected' && value.body.room.moves.length === before.moves.length)
   assert.notEqual((await host.request('/state')).body.room.port, port)
   assert.deepEqual(state.body.room.moves, before.moves)
+  assert.equal(state.body.room.boardSize, 15)
   assert.equal(state.body.room.gameId, before.gameId)
   assert.equal(state.body.room.turn, before.turn)
-  for (let index = before.moves.length; index < 200; index++) {
+  for (let index = before.moves.length; index < moves.length; index++) {
     const actor = index % 2 ? guest : host
     assert.equal((await actor.request('/move', {
-      gameId: before.gameId, moveNo: index + 1, x: (index % 25) * 2, y: Math.floor(index / 25) * 2,
+      gameId: before.gameId, moveNo: index + 1, ...moves[index],
     })).status, 200)
   }
-  const finished = await until(() => guest.request('/state'), result => result.body.room.finished?.reason === 'move-limit')
+  const finished = await until(() => guest.request('/state'), result => result.body.room.finished?.reason === 'board-full')
   assert.equal(finished.body.room.finished.winner, null)
-  assert.equal(finished.body.room.finished.moves, 200)
+  assert.equal(finished.body.room.finished.moves, 225)
+  assert.deepEqual((await host.request('/state')).body.room.finished, finished.body.room.finished)
 })
 
 test('direct invites, focus, move replay and results survive a guest crash', { timeout: 25000 }, async t => {
@@ -377,8 +395,8 @@ test('private Caro room requires a PIN, appears by exact name and preserves rule
   assert.equal(rematch.mark, 'X')
   assert.equal(rematch.ruleset, 'vn')
   const turns = [
-    [0, 0], [-1, 0], [1, 0], [5, 0], [2, 0], [0, 8], [3, 0], [2, 8], [4, 0],
-    [4, 8], [0, 1], [6, 8], [0, 2], [8, 8], [0, 3], [10, 8], [0, 4],
+    [0, 0], [-1, 0], [1, 0], [5, 0], [2, 0], [-3, 7], [3, 0], [-1, 7], [4, 0],
+    [1, 7], [0, 1], [3, 7], [0, 2], [5, 7], [0, 3], [7, 7], [0, 4],
   ]
   for (const [index, [x, y]] of turns.entries()) {
     const player = index % 2 ? host : guest

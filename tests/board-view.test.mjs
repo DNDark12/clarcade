@@ -24,9 +24,10 @@ test('the grid accepts clicks on outer edges, dividers and intersections', () =>
 })
 
 test('compacts the grid and reports when the viewport hides cells', () => {
-  const wide = boardProps(room, null, true, 80, 30, grid)
+  const wide = boardProps(room, null, true, 80, 32, grid)
   const narrow = boardProps({ ...room, moves: [{ x: 0, y: 0, mark: 'X' }, { x: 5, y: 0, mark: 'O' }] }, null, true, 24, 30, grid)
-  assert.equal(boardLayout(wide).drawnWidth, 26)
+  assert.equal(boardLayout(wide).drawnWidth, 50)
+  assert.equal(boardLayout(wide).height, 15)
   assert.equal(wide.cropped, false)
   assert.equal(narrow.cropped, true)
 })
@@ -46,20 +47,22 @@ test('Desktop grid uses one native row per cell and shares the pointer origin', 
   assert.equal(wide.cropped, false)
   assert.equal(layout.cellHeight, 1)
   assert.equal(layout.cellWidth * 8.8, 20)
-  assert.deepEqual(pointerCell(layout, wide.rulers, { x: 39, y: 4 }), { x: 0, y: 0 })
-  assert.deepEqual(pointerCell(layout, wide.rulers, { x: 48, y: 8 }), { x: 3, y: 3 })
-  assert.equal(pointerCell(layout, wide.rulers, { x: 49, y: 8 }), null)
+  assert.deepEqual(pointerCell(layout, wide.rulers, { x: 41, y: 8 }), { x: 0, y: 0 })
+  assert.deepEqual(pointerCell(layout, wide.rulers, { x: 58, y: 16 }), { x: 7, y: 7 })
+  assert.equal(pointerCell(layout, wide.rulers, { x: 59, y: 16 }), null)
 
   const narrow = boardProps({ ...room, moves: [{ x: 0, y: 0, mark: 'X' }, { x: 5, y: 0, mark: 'O' }] }, null, true, 24, 18, grid, true)
   assert.equal(narrow.cropped, true)
   assert.equal(boardLayout(narrow).width, 10)
 })
 
-test('Desktop grid strokes snap to one CSS pixel as the board expands', () => {
-  const moves = [{ x: 0, y: 0, mark: 'X' }]
-  for (let x = 0; x <= 10; x++) {
-    const props = boardProps({ ...room, moves }, null, true, 80, 18, grid, true)
+test('Desktop keeps the same fifteen-by-fifteen grid and one-pixel strokes through edge moves', () => {
+  const moves = Array.from({ length: 8 }, (_, x) => ({ x, y: 0, mark: x % 2 ? 'O' : 'X' }))
+  for (let count = 0; count <= moves.length; count++) {
+    const props = boardProps({ ...room, moves: moves.slice(0, count) }, null, true, 80, 18, grid, true)
     const layout = boardLayout(props)
+    assert.deepEqual([props.minX, props.maxX, props.minY, props.maxY, layout.width, layout.height], [-7, 7, -7, 7, 15, 15])
+    assert.equal(props.cells.length, 225)
     const left = layout.offset + layout.ruler
     const verticalLines = Array.from({ length: layout.width + 1 }, (_, index) => {
       const column = left + index * layout.cellWidth
@@ -68,6 +71,5 @@ test('Desktop grid strokes snap to one CSS pixel as the board expands', () => {
     assert.equal(new Set(verticalLines.map(([start]) => start)).size, layout.width + 1)
     assert(verticalLines.every(([start, end]) => end === start + 1))
     assert.equal(DESKTOP_GRID.horizontalStroke * 20, 1)
-    moves.push({ x: x + 1, y: 0, mark: 'O' })
   }
 })

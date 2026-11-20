@@ -1,13 +1,19 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 const invite = 'clarcade://j/K7M2QX'
+const alternateInvite = invite + '@192.168.1.20:49000'
 const original = {
   roomCode: 'K7M2QX', roomName: 'QA game', gameId: 'game-1', ruleset: 'freestyle',
   host: { playerId: 'host', name: 'An' }, guest: null,
   role: 'host', status: 'waiting', connection: 'waiting', mark: 'X', turn: 'X',
   moves: [], winLine: null, boardVersion: 0, rematchVotes: [], pendingMove: null,
+  boardSize: 15,
   finished: null, disconnectedAt: null, holdMs: 1800000,
   link: invite, directLink: invite + '@192.168.0.20:49000',
+  directLinks: [
+    { address: '192.168.0.20', link: invite + '@192.168.0.20:49000' },
+    { address: '192.168.1.20', link: alternateInvite },
+  ],
 }
 const surfaces = ['terminal', 'desktop'] as const
 const pane = (surface: 'terminal' | 'desktop' | 'mobile' | 'vscode', columns = 42) => ({
@@ -18,7 +24,7 @@ const pane = (surface: 'terminal' | 'desktop' | 'mobile' | 'vscode', columns = 4
   },
 })
 
-function fixture(on, { privateRoom = false } = {}) {
+function fixture(on, { privateRoom = false, publicRoom = false } = {}) {
   const store = mock.store(on)
   const clock = mock.clock(on)
   let room = null
@@ -52,7 +58,7 @@ function fixture(on, { privateRoom = false } = {}) {
     let reply = {}
     if (path === '/host') change({
       ...original, roomName: body.roomName, ruleset: body.ruleset,
-      visibility: body.visibility, turnMs: body.turnMs, moveLimit: body.moveLimit,
+      visibility: body.visibility, turnMs: body.turnMs,
     })
     if (path === '/join' && privateRoom && body.pin !== '0042') {
       return { value: { status: 409, ok: false, headers: {}, text: JSON.stringify({
@@ -67,9 +73,13 @@ function fixture(on, { privateRoom = false } = {}) {
       if (url.searchParams.get('v') === String(revision)) return { value: { status: 204, ok: true, headers: {}, text: '' } }
       reply = { version: String(revision), room, notifications }
     }
-    if (path === '/rooms') reply = { rooms: privateRoom && url.searchParams.get('name') === 'Caro QA'
-      ? [{ roomCode: 'K7M2QX', roomName: 'Caro QA', hostName: 'An', ruleset: 'vn', status: 'waiting',
-        visibility: 'private', address: '192.168.0.20', port: 49000, latencyMs: 1 }] : [] }
+    if (path === '/rooms') {
+      const matchedPrivate = privateRoom && url.searchParams.get('name') === 'Caro QA'
+      reply = { rooms: matchedPrivate || publicRoom
+        ? [{ roomCode: original.roomCode, roomName: matchedPrivate ? 'Caro QA' : original.roomName,
+          hostName: 'An', ruleset: matchedPrivate ? 'vn' : 'freestyle', status: 'waiting',
+          visibility: matchedPrivate ? 'private' : 'public', address: '192.168.0.20', port: 49000, latencyMs: 1 }] : [] }
+    }
     if (path === '/stats') reply = { total: { played: 2, wins: 1, losses: 1, draws: 0 }, opponents: [] }
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(reply) } }
   })
@@ -83,15 +93,29 @@ for (const surface of surfaces) {
     expect(f.opens).toHaveLength(0)
     await $.command.run({ command: 'clarcade', args: '' })
     const ui = await $.ui.mount(pane(surface))
+    expect(await ui.findAll({ type: 'Button', text: 'Save' })).toHaveLength(0)
+    expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { gap: 'sm' } })
     await ui.input({ key: 'player-name', text: 'An' })
     await ui.press({ key: 'tab-host' })
+    expect(await ui.findAll({ type: 'Button', text: 'Create room' })).toHaveLength(0)
+    expect(await ui.find({ key: 'turnMs' })).toBeUndefined()
+    expect(await ui.find({ type: 'Input', key: 'host-pin' })).toBeUndefined()
     await ui.input({ key: 'room-name', text: 'QA game' })
     expect(f.requests.find(call => call.path === '/host')?.body).toEqual({
       roomName: 'QA game', name: 'An', holdMs: 1800000,
-      ruleset: 'freestyle', visibility: 'public', turnMs: 0, moveLimit: 0,
+      ruleset: 'freestyle', visibility: 'public', turnMs: 0,
     })
+    expect(await ui.find({ type: 'Text', text: /K\s*7\s*M\s*2\s*Q\s*X/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /select this room from Join room/ })).toBeTruthy()
+    expect(await ui.findAll({ type: 'Button', text: /Copy link/ })).toHaveLength(1)
+    expect(await ui.find({ type: 'Select', key: 'invite-address' })).toBeUndefined()
     await ui.press({ key: 'copy-link' })
     expect(await ui.find({ type: 'Text', text: invite })).toBeTruthy()
+    await ui.press({ key: 'firewall-help' })
+    await ui.select({ key: 'invite-address', value: '192.168.1.20' })
+    expect(await ui.findAll({ type: 'Button', text: /Copy link/ })).toHaveLength(1)
+    await ui.press({ key: 'copy-link' })
+    expect(await ui.find({ type: 'Text', text: alternateInvite })).toBeTruthy()
     f.change({ ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' } })
     await f.clock.advance(3000)
     expect(await ui.find({ type: 'Client', key: 'board' })).toBeTruthy()
@@ -107,8 +131,30 @@ for (const surface of surfaces) {
     await f.clock.advance(3000)
     await reopened.key({ key: 'return', in: 'board' })
     expect(f.requests.filter(call => call.path === '/move').at(-1)?.body)
-      .toEqual({ gameId: 'game-1', moveNo: 3, moveEpoch: 0, x: 3, y: 0 })
+      .toEqual({ gameId: 'game-1', moveNo: 3, moveEpoch: 0, x: 5, y: 0 })
     await reopened.unmount()
+  })
+
+  test(`${surface}: join a public room from LAN discovery without entering a code or PIN`, async ($, on) => {
+    const f = fixture(on, { publicRoom: true })
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    await $.command.run({ command: 'clarcade', args: '', origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 42 } })
+    const ui = await $.ui.mount(pane(surface))
+    await ui.input({ key: 'player-name', text: 'Binh' })
+    expect(await ui.find({ key: 'tab-discover' })).toBeUndefined()
+    await ui.press({ key: 'tab-join' })
+    expect(await ui.findAll({ type: 'Input' })).toHaveLength(1)
+    expect(await ui.find({ type: 'Input', key: 'join-target' })).toBeTruthy()
+    const key = 'join-K7M2QX-192.168.0.20-49000'
+    expect(await ui.find({ type: 'Button', key, text: /QA game · An/ })).toBeTruthy()
+    await ui.press({ key })
+    expect(f.requests.find(call => call.path === '/join')?.body).toEqual({
+      link: original.directLink, name: 'Binh',
+    })
+    expect(await ui.find({ type: 'Input', key: 'join-pin' })).toBeUndefined()
+    expect(await ui.find({ type: 'Client', key: 'board' })).toBeTruthy()
+    await ui.unmount()
   })
 
   test(`${surface}: join by link, finish, rematch and show stats`, async ($, on) => {
@@ -193,13 +239,13 @@ for (const surface of surfaces) {
     f.change({ ...room, connection: 'connected' }, [{ id: 'boot:3', event: 'turn' }])
     await f.clock.advance(3000)
     expect(f.toasts).toHaveLength(0)
-    await ui.pointer({ type: 'down', x: 20, y: surface === 'desktop' ? 3 : 7, button: 'left', in: 'board' })
+    await ui.pointer({ type: 'down', x: 20, y: surface === 'desktop' ? 7 : 8, button: 'left', in: 'board' })
     expect(f.requests.filter(call => call.path === '/move')).toHaveLength(1)
     await ui.key({ key: 'return', in: 'board' })
     expect(f.requests.filter(call => call.path === '/move')).toHaveLength(1)
     await ui.press({ key: 'tab-settings' })
-    await ui.press({ key: 'language-vi' })
-    expect(await ui.find({ type: 'Text', text: 'Ngôn ngữ' })).toBeTruthy()
+    await ui.select({ key: 'language', value: 'vi' })
+    expect(JSON.stringify(await ui.drawn())).toContain('Ngôn ngữ')
     await ui.unmount()
   })
 }
@@ -214,19 +260,22 @@ for (const surface of surfaces) {
     await ui.press({ key: 'tab-host' })
     await ui.select({ key: 'ruleset', value: 'vn' })
     expect(await ui.find({ type: 'Text', text: /at least one open end/ })).toBeTruthy()
-    await ui.press({ key: 'visibility-private' })
+    await ui.select({ key: 'visibility', value: 'private' })
     await ui.input({ key: 'host-pin', text: '0042' })
-    await ui.press({ key: 'turnMs-30000' })
-    await ui.press({ key: 'moveLimit-200' })
+    await ui.press({ key: 'toggle-room-options' })
+    await ui.select({ key: 'turnMs', value: '30000' })
+    expect(await ui.find({ key: 'moveLimit' })).toBeUndefined()
     await ui.input({ key: 'room-name', text: 'Caro QA' })
     expect(f.requests.filter(call => call.path === '/host').at(-1).body).toEqual({
       roomName: 'Caro QA', name: 'An', holdMs: 1800000, ruleset: 'vn', visibility: 'private',
-      pin: '0042', turnMs: 30000, moveLimit: 200,
+      pin: '0042', turnMs: 30000,
     })
     expect(await ui.find({ type: 'Text', text: 'Private' })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /Share the PIN/ })).toBeTruthy()
     await ui.press({ key: 'leave-room' })
     await ui.press({ key: 'confirm-action' })
     await ui.press({ key: 'tab-host' })
+    expect(await ui.find({ key: 'turnMs' })).toBeUndefined()
     await ui.input({ key: 'room-name', text: 'Default QA' })
     const next = f.requests.filter(call => call.path === '/host').at(-1).body
     expect(next.ruleset).toBe('freestyle')
@@ -238,10 +287,16 @@ for (const surface of surfaces) {
   test(`${surface}: exact room name opens a PIN prompt and Caro offer controls`, async ($, on) => {
     const f = fixture(on, { privateRoom: true })
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    await $.command.run({ command: 'clarcade', args: 'join Caro QA' })
+    await $.command.run({ command: 'clarcade', args: '' })
     const ui = await $.ui.mount(pane(surface))
     await ui.input({ key: 'player-name', text: 'Binh' })
+    await ui.press({ key: 'tab-join' })
+    await ui.input({ key: 'join-target', text: 'Caro QA' })
     expect(await ui.find({ type: 'Text', text: 'This room requires a PIN.' })).toBeTruthy()
+    expect(await ui.findAll({ type: 'Input' })).toHaveLength(1)
+    await ui.press({ key: 'back-to-rooms' })
+    await ui.input({ key: 'join-target', text: invite })
+    expect(await ui.find({ type: 'Input', key: 'join-pin' })).toBeTruthy()
     await ui.input({ key: 'join-pin', text: '0042' })
     expect(f.requests.filter(call => call.path === '/join').at(-1).body.pin).toBe('0042')
     expect(await ui.find({ type: 'Text', text: /Blocked ends/ })).toBeTruthy()
@@ -259,24 +314,27 @@ for (const surface of surfaces) {
 }
 
 for (const surface of surfaces) {
-  for (const [columns, x, y] of [[36, 17, 7], [80, 41, 8]]) {
+  for (const [columns, terminalClick, desktopClick] of [
+    [36, { x: 17, y: 8 }, { x: 17, y: 7 }],
+    [80, { x: 41, y: 9 }, { x: 41, y: 8 }],
+  ] as const) {
     test(`${surface}: centered grid edge click at ${columns} columns and live display options`, async ($, on) => {
       const f = fixture(on)
       await $.session.start({ cwd: '/', surface, isInteractive: true })
       await $.command.run({ command: 'clarcade', args: '' })
       const ui = await $.ui.mount(pane(surface, columns))
       await ui.input({ key: 'player-name', text: 'An' })
-      expect(await ui.find({ type: 'Button', key: 'tab-discover' })).toBeTruthy()
+      expect(await ui.find({ type: 'Button', key: 'tab-join' })).toBeTruthy()
       f.change({ ...original, status: 'playing', connection: 'connected',
         guest: { playerId: 'guest', name: 'Binh' } })
       await f.clock.advance(3000)
       const grid = surface === 'desktop' ? { type: 'Box' as const, key: 'grid-columns', in: 'board' }
         : { type: 'Text' as const, text: /┌──┬/, in: 'board' }
       expect(await ui.find(grid)).toBeTruthy()
-      expect(await ui.find({ type: 'Text', text: /More cells off-screen/ })).toBeUndefined()
+      expect(Boolean(await ui.find({ type: 'Text', text: /More cells off-screen/ }))).toBe(surface === 'terminal')
       await ui.pointer({ type: 'down', x: 0, y: 0, button: 'left', in: 'board' })
       expect(f.requests.filter(call => call.path === '/move')).toHaveLength(0)
-      await ui.pointer({ type: 'down', x: x - (surface === 'desktop' ? 2 : 1), y: surface === 'desktop' ? (columns >= 48 ? 4 : 3) : y - 1, button: 'left', in: 'board' })
+      await ui.pointer({ type: 'down', ...(surface === 'desktop' ? desktopClick : terminalClick), button: 'left', in: 'board' })
       expect(f.requests.filter(call => call.path === '/move').map(call => call.body)).toEqual([
         { gameId: 'game-1', moveNo: 1, moveEpoch: 0, x: 0, y: 0 },
       ])
@@ -291,24 +349,25 @@ for (const surface of surfaces) {
         moves: [{ x: 0, y: 0, mark: 'X' }, { x: 1, y: 0, mark: 'O' }] })
       await f.clock.advance(3000)
       await ui.press({ key: 'tab-settings' })
+      expect(await ui.findAll({ type: 'Button', text: 'Save' })).toHaveLength(0)
       expect(await ui.find({ type: 'Input', key: 'node-path' })).toBeUndefined()
+      expect(await ui.find({ type: 'Select', key: 'pieces' })).toBeUndefined()
       await ui.press({ key: 'toggle-advanced' })
+      expect(await ui.find({ type: 'Input', key: 'node-path' })).toBeUndefined()
+      await ui.press({ key: 'toggle-network' })
       expect(await ui.find({ type: 'Input', key: 'node-path' })).toBeTruthy()
-      await ui.press({ key: 'pieces-oo' })
+      await ui.select({ key: 'pieces', value: 'oo' })
       await ui.press({ key: 'tab-game' })
       expect(await ui.find({ type: 'Text', text: surface === 'desktop' ? '○' : '[○]', in: 'board' })).toBeTruthy()
       await ui.press({ key: 'tab-settings' })
-      await ui.press({ key: 'pieces-pixel' })
-      await ui.press({ key: 'board-dots' })
+      await ui.select({ key: 'pieces', value: 'pixel' })
+      await ui.select({ key: 'board', value: 'dots' })
       await ui.press({ key: 'tab-game' })
       expect(await ui.find(grid)).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: '■', in: 'board' })).toBeTruthy()
       expect(await ui.find({ type: 'Text', text: '□', in: 'board' })).toBeTruthy()
       expect(await ui.find({ type: 'Text', text: /More cells off-screen/ })).toBeUndefined()
-      f.change({ ...original, status: 'playing', connection: 'connected',
-        guest: { playerId: 'guest', name: 'Binh' }, boardVersion: 2,
-        moves: [{ x: 0, y: 0, mark: 'X' }, { x: 90, y: 0, mark: 'O' }] })
-      await f.clock.advance(3000)
+      await ui.redraw(pane(surface, 24).props)
       expect(await ui.find({ type: 'Text', text: /More cells off-screen/ })).toBeTruthy()
       await ui.unmount()
     })

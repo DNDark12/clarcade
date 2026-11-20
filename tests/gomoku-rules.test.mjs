@@ -92,9 +92,9 @@ test('rejects the wrong mark and an occupied cell', () => {
 test('accepts both boundaries and rejects invalid coordinates on either axis', () => {
   const state = { board: new Map([['0,0', 'X']]), turn: 'O', winLine: null }
 
-  assert.equal(applyMove(state, { x: -100, y: 100, mark: 'O' }).ok, true)
-  assert.equal(applyMove(state, { x: 100, y: -100, mark: 'O' }).ok, true)
-  for (const [x, y] of [[-101, 0], [101, 0], [0, -101], [0, 101], [0.5, 0], [0, NaN], ['1', 0]]) {
+  assert.equal(applyMove(state, { x: -7, y: 7, mark: 'O' }).ok, true)
+  assert.equal(applyMove(state, { x: 7, y: -7, mark: 'O' }).ok, true)
+  for (const [x, y] of [[-8, 0], [8, 0], [0, -8], [0, 8], [0.5, 0], [0, NaN], ['1', 0]]) {
     assert.deepEqual(applyMove(state, { x, y, mark: 'O' }), {
       ok: false, reason: 'invalid-coordinates',
     })
@@ -104,8 +104,8 @@ test('accepts both boundaries and rejects invalid coordinates on either axis', (
 test('the winning move records the line at the board edge and ends the game', () => {
   const initial = { board: new Map(), turn: 'X', winLine: null, ruleset: 'freestyle' }
   const moves = [
-    [0, 0], [1, 0], [96, 100], [2, 0], [97, 100],
-    [3, 0], [98, 100], [4, 0], [99, 100], [6, 0], [100, 100],
+    [0, 0], [1, 0], [3, 7], [2, 0], [4, 7],
+    [3, 0], [5, 7], [4, 0], [6, 7], [6, 0], [7, 7],
   ]
   const finished = moves.reduce((state, [x, y]) => {
     const result = applyMove(state, { x, y, mark: state.turn })
@@ -115,27 +115,14 @@ test('the winning move records the line at the board edge and ends the game', ()
 
   assert.equal(finished.turn, null)
   assert.equal(finished.ruleset, 'freestyle')
-  assert.deepEqual(finished.winLine, [96, 97, 98, 99, 100].map(x => ({ x, y: 100 })))
+  assert.deepEqual(finished.winLine, [3, 4, 5, 6, 7].map(x => ({ x, y: 7 })))
   assert.deepEqual(applyMove(finished, { x: 5, y: 0, mark: 'O' }), {
     ok: false, reason: 'finished',
   })
 })
 
-test('starts with a seven-by-seven board centered on the origin', () => {
-  assert.deepEqual(bounds(new Map()), { minX: -3, maxX: 3, minY: -3, maxY: 3 })
-})
-
-for (const [x, y, key, expected] of [
-  [3, 0, 'maxX', 6], [-3, 0, 'minX', -6], [0, 3, 'maxY', 6], [0, -3, 'minY', -6],
-]) {
-  test(`extends the board three cells past (${x}, ${y})`, () => {
-    assert.equal(bounds(new Map([['0,0', 'X'], [`${x},${y}`, 'O']]))[key], expected)
-  })
-}
-
-test('clips padding against both board limits', () => {
-  assert.deepEqual(bounds(new Map([['-98,98', 'X'], ['99,-99', 'O']])),
-    { minX: -100, maxX: 100, minY: -100, maxY: 100 })
+test('starts with a fixed fifteen-by-fifteen board centered on the origin', () => {
+  assert.deepEqual(bounds(), { minX: -7, maxX: 7, minY: -7, maxY: 7 })
 })
 
 for (const [length, left, right, wins] of [
@@ -152,11 +139,11 @@ for (const [length, left, right, wins] of [
 }
 
 test('Caro counts the edge as open and checks the other directions after a blocked run', () => {
-  const line = Array.from({ length: 5 }, (_, i) => ({ x: 0, y: 96 + i }))
+  const line = Array.from({ length: 5 }, (_, i) => ({ x: 0, y: 3 + i }))
   const board = new Map(line.map(({ x, y }) => [`${x},${y}`, 'X']))
-  board.set('0,95', 'O')
-  for (const x of [-2, -1, 1, 2]) board.set(`${x},100`, 'X')
-  board.set('-3,100', 'O')
-  board.set('3,100', 'O')
-  assert.deepEqual(findWinLine(board, { x: 0, y: 100 }, 'vn'), line)
+  board.set('0,2', 'O')
+  for (const x of [-2, -1, 1, 2]) board.set(`${x},7`, 'X')
+  board.set('-3,7', 'O')
+  board.set('3,7', 'O')
+  assert.deepEqual(findWinLine(board, { x: 0, y: 7 }, 'vn'), line)
 })

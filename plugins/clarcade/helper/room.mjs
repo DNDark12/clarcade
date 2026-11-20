@@ -2,7 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createConnection, createServer, isIP } from 'node:net'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { DEFAULT_RULESET, applyMove, validRuleset } from '../games/gomoku/rules.js'
+import { BOARD_SIZE, DEFAULT_RULESET, LEGACY_BOARD_SIZE, applyMove, validRuleset } from '../games/gomoku/rules.js'
 import { ROOM_CODE, parseLink, roomCodeFromBytes, roomLinks } from '../hooks/link.js'
 import { advertise, allowedAddress, discover, lanAddresses, normalizeAddress } from './discovery.mjs'
 import { channel } from './net.mjs'
@@ -14,7 +14,7 @@ import {
 import { quarantine, readJson, writeJson } from './runtime.mjs'
 
 const TURN_TIMES = [0, 30000, 60000, 120000, 300000]
-const MOVE_LIMITS = [0, 200, 400]
+const LEGACY_MOVE_LIMITS = [0, 200, 400]
 const VISIBILITIES = ['public', 'private']
 const EMOTES = ['gg', 'nice', 'thinking']
 const EXTRA_ACTIONS = ['undoReq', 'undoResp', 'drawReq', 'drawResp', 'emote']
@@ -35,7 +35,10 @@ export class Room {
     try {
       if (this.saved) this.saved = normalizeRoom(this.saved)
       if (this.saved && !validSavedRoom(this.saved)) throw new Error('invalid-room')
-      this.game = this.saved && restoreGame(this.saved.moves, this.saved.ruleset)
+      if (this.saved?.role === 'host' && this.saved.guest === null && this.saved.moves?.length === 0) {
+        Object.assign(this.saved, { boardSize: BOARD_SIZE, moveLimit: 0 })
+      }
+      this.game = this.saved && restoreGame(this.saved.moves, this.saved.ruleset, this.saved.boardSize)
     } catch (error) {
       quarantine(this.path, error)
       this.saved = null
@@ -83,7 +86,7 @@ export class Room {
     const room = this.saved
     if (!room) return null
     return {
-      role: room.role, roomCode: room.roomCode, roomName: room.roomName,
+      role: room.role, roomCode: room.roomCode, roomName: room.roomName, boardSize: room.boardSize,
       host: room.host, guest: room.guest, gameId: room.gameId, ruleset: room.ruleset,
       visibility: room.visibility, turnMs: room.turnMs, moveLimit: room.moveLimit,
       firstPlayerId: room.firstPlayerId,
@@ -102,12 +105,12 @@ export class Room {
 
   async host({
     roomName, name: hostName, holdMs = HOLD_TIMES[1], ruleset = DEFAULT_RULESET,
-    visibility = 'public', pin, turnMs = 0, moveLimit = 0,
+    visibility = 'public', pin, turnMs = 0,
   }) {
     if (this.saved || this.opening || this.stopping) throw problem('room-active', 409)
     if (!name(roomName) || !name(hostName) || !HOLD_TIMES.includes(holdMs) ||
         !validRuleset(ruleset) || !VISIBILITIES.includes(visibility) ||
-        !TURN_TIMES.includes(turnMs) || !MOVE_LIMITS.includes(moveLimit)) {
+        !TURN_TIMES.includes(turnMs)) {
       throw problem('invalid-room')
     }
     if (visibility === 'private' && !validPin(pin)) throw problem('invalid-pin')
@@ -116,7 +119,7 @@ export class Room {
       const room = {
         role: 'host', roomCode: roomCodeFromBytes(randomBytes(6)), roomName,
         host: { playerId: this.me, name: hostName }, guest: null, token: null,
-        holdMs, ruleset, visibility, turnMs, moveLimit, disconnectedAt: null,
+        holdMs, ruleset, visibility, turnMs, disconnectedAt: null,
         ...(visibility === 'private' && { pinHash: createPin(pin), pinAttempts: {} }),
         results: [], pendingResults: [], ...newGame(this.me),
       }
@@ -248,7 +251,7 @@ export class Room {
   sendState() {
     const room = this.saved
     const meta = {
-      host: room.host, guest: room.guest, roomName: room.roomName, ruleset: room.ruleset,
+      host: room.host, guest: room.guest, roomName: room.roomName, ruleset: room.ruleset, boardSize: room.boardSize,
       visibility: room.visibility, turnMs: room.turnMs, moveLimit: room.moveLimit,
       moveEpoch: room.moveEpoch, offer: room.offer,
       clockLeftMs: room.turnEndsAt === null ? null : Math.max(0, room.turnEndsAt - Date.now()),
@@ -406,8 +409,8 @@ export class Room {
       return true
     }
     if (!this.saved) return
-    if (frame.type === 'moveAck' && validMove(frame)) this.ackMove(frame)
-    if (frame.type === 'moveReject' && validMove(frame) && this.matchesPending(frame)) {
+    if (frame.type === 'moveAck' && validMove(frame, this.game.boardSize)) this.ackMove(frame)
+    if (frame.type === 'moveReject' && validMove(frame, this.game.boardSize) && this.matchesPending(frame)) {
       this.awaitSync()
       this.replyMove({ ok: false, reason: frame.reason })
     }
@@ -440,7 +443,7 @@ export class Room {
     if (!validPlayer(meta.host) || !validPlayer(meta.guest) || meta.guest.playerId !== this.me ||
         meta.host.playerId === this.me || !name(meta.roomName) || !validRuleset(properties.ruleset) ||
         !VISIBILITIES.includes(properties.visibility) || !TURN_TIMES.includes(properties.turnMs) ||
-        !MOVE_LIMITS.includes(properties.moveLimit) || !validEpoch(properties.moveEpoch) ||
+        !validLegacyMoveLimit(properties) || !validEpoch(properties.moveEpoch) ||
         !validOffer(properties.offer, meta.host.playerId, this.me) ||
         (meta.clockLeftMs != null && (!Number.isInteger(meta.clockLeftMs) ||
           meta.clockLeftMs < 0 || meta.clockLeftMs > properties.turnMs)) ||
@@ -450,7 +453,7 @@ export class Room {
         meta.rematchVotes.length > 2 || !Number.isSafeInteger(meta.startedAt) ||
         (this.saved && meta.host.playerId !== this.saved.host.playerId)) return false
     let game
-    try { game = restoreGame(moves, properties.ruleset) } catch { return false }
+    try { game = restoreGame(moves, properties.ruleset, properties.boardSize) } catch { return false }
     if (meta.finished !== null && !validResult(meta.finished, meta.host.playerId, this.me)) return false
     if (meta.finished && (meta.finished.gameId !== gameId || meta.finished.moves !== moves.length ||
         meta.finished.ruleset !== properties.ruleset)) return false
@@ -464,7 +467,7 @@ export class Room {
       moveLimit: properties.moveLimit, moveEpoch: properties.moveEpoch, offer: properties.offer,
       turnEndsAt: meta.clockLeftMs == null ? null : receivedAt + meta.clockLeftMs,
       turnRemainingMs: meta.clockLeftMs ?? 0,
-      gameId, moves, firstPlayerId: meta.firstPlayerId, startedAt: meta.startedAt,
+      gameId, moves, boardSize: properties.boardSize, firstPlayerId: meta.firstPlayerId, startedAt: meta.startedAt,
       finished: meta.finished, rematchVotes: meta.rematchVotes, disconnectedAt: null,
       results: this.saved?.results ?? [], pendingResults: [],
     }, game)
@@ -544,7 +547,7 @@ export class Room {
 
   hostFrame(frame) {
     if (!this.saved) return
-    if (frame.type === 'move' && validMove(frame)) {
+    if (frame.type === 'move' && validMove(frame, LEGACY_BOARD_SIZE)) {
       const result = this.hostMove(frame, this.saved.guest.playerId)
       if (!result.ok && this.peer) {
         if (result.reason !== 'stale-game') {
@@ -574,7 +577,7 @@ export class Room {
   async move(move) {
     if (!this.saved) throw problem('no-room', 404)
     if (this.departure) throw problem('peer-unavailable', 409)
-    if (!validMove(move)) throw problem('invalid-move')
+    if (!validMove(move, this.game.boardSize)) throw problem('invalid-move')
     if (this.saved.role === 'host') return this.hostMove(move, this.me)
     if (this.connection !== 'connected') return { ok: false, reason: 'syncing' }
     if (this.pendingMove) return { ok: false, reason: 'move-pending' }
@@ -614,7 +617,7 @@ export class Room {
     const next = { ...room, ...startClock(room), offer: null,
       moves: [...room.moves, { x: frame.x, y: frame.y, mark }] }
     const limitReached = room.moveLimit && next.moves.length >= room.moveLimit
-    const finished = result.state.winLine || limitReached || next.moves.length === MAX_MOVES
+    const finished = result.state.turn === null || limitReached
     if (finished) {
       this.finishRoom(next, result.state.winLine ? playerId : null,
         result.state.winLine ? 'line' : limitReached ? 'move-limit' : 'board-full', result.state)
@@ -751,7 +754,7 @@ export class Room {
     } else {
       const moves = room.moves.slice(0, -1)
       this.commit({ ...room, ...startClock(room), moves, offer: null, moveEpoch: room.moveEpoch + 1 },
-        restoreGame(moves, room.ruleset))
+        restoreGame(moves, room.ruleset, room.boardSize))
       this.sendState()
       return
     }
@@ -915,15 +918,19 @@ function gameResult(room, winner, reason) {
 function newGame(firstPlayerId) {
   return {
     gameId: randomUUID(), firstPlayerId, moves: [], finished: null, startedAt: null, rematchVotes: [],
-    moveEpoch: 0, offer: null, turnEndsAt: null, turnRemainingMs: 0,
+    boardSize: BOARD_SIZE, moveLimit: 0, moveEpoch: 0, offer: null, turnEndsAt: null, turnRemainingMs: 0,
   }
 }
 
 function normalizeRoom(room) {
   return {
-    ruleset: DEFAULT_RULESET, visibility: 'public', moveEpoch: 0, turnMs: 0, moveLimit: 0,
+    ruleset: DEFAULT_RULESET, visibility: 'public', boardSize: LEGACY_BOARD_SIZE, moveEpoch: 0, turnMs: 0, moveLimit: 0,
     turnEndsAt: null, turnRemainingMs: 0, offer: null, ...room,
   }
+}
+
+function validLegacyMoveLimit({ boardSize, moveLimit }) {
+  return moveLimit === 0 || (boardSize === LEGACY_BOARD_SIZE && LEGACY_MOVE_LIMITS.includes(moveLimit))
 }
 
 function startClock(room, remaining = room.turnMs) {
@@ -942,7 +949,7 @@ function validSavedRoom(room) {
   const results = value => Array.isArray(value) && value.every(record)
   return ['host', 'guest'].includes(room.role) && ROOM_CODE.test(room.roomCode ?? '') && name(room.roomName) &&
     validPlayer(room.host) && (room.guest === null || validPlayer(room.guest)) &&
-    validId(room.gameId) && validId(room.firstPlayerId) && validRuleset(room.ruleset) &&
+    validId(room.gameId) && validId(room.firstPlayerId) && validRuleset(room.ruleset) && validLegacyMoveLimit(room) &&
     results(room.results) && results(room.pendingResults) &&
     (room.departedResults === undefined || results(room.departedResults)) &&
     (room.role === 'host' || (room.guest !== null && validToken(room.token) &&

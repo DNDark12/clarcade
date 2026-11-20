@@ -25,8 +25,7 @@ export function pieceGlyphs(style, desktop) {
 }
 
 export function boardProps(room, view, enabled, columns, lines, { board: style, pieces }, desktop = false) {
-  const board = new Map(room.moves.map(({ x, y, mark }) => [`${x},${y}`, mark]))
-  const area = bounds(board)
+  const area = bounds(room.boardSize)
   const width = area.maxX - area.minX + 1
   const cells = Array(width * (area.maxY - area.minY + 1)).fill('.')
   for (const { x, y, mark } of room.moves) cells[(y - area.minY) * width + x - area.minX] = mark

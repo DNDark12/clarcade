@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { allowedAddress } from '../plugins/clarcade/helper/discovery.mjs'
 import { createPin, checkPin } from '../plugins/clarcade/helper/pin.mjs'
 import { Room } from '../plugins/clarcade/helper/room.mjs'
-import { restoreGame } from '../plugins/clarcade/helper/protocol.mjs'
+import { addStatePart, beginState, restoreGame } from '../plugins/clarcade/helper/protocol.mjs'
 import { olderVersion } from '../plugins/clarcade/helper/runtime.mjs'
 import { openStats } from '../plugins/clarcade/helper/stats.mjs'
 import { parseLink, roomLinks } from '../plugins/clarcade/hooks/link.js'
@@ -108,6 +108,39 @@ test('only a daemon from an older plugin version is outdated', () => {
   assert.equal(olderVersion('0.9.9', '0.10.0'), true)
   assert.equal(olderVersion('0.1.1', '0.1.0'), false)
   assert.equal(olderVersion('0.1.0', '0.1.0'), false)
+})
+
+test('restores a legacy game with outside moves and starts the rematch on a 15x15 board', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'clarcade-legacy-board-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const host = { playerId: '00000000-0000-4000-8000-000000000001', name: 'An' }
+  const guest = { playerId: '00000000-0000-4000-8000-000000000002', name: 'Binh' }
+  const gameId = '00000000-0000-4000-8000-000000000003'
+  const moves = [{ x: 0, y: 0, mark: 'X' }, { x: 12, y: -12, mark: 'O' }]
+  writeFileSync(join(directory, 'room.json'), JSON.stringify({
+    role: 'host', roomCode: 'K7M2QX', roomName: 'Legacy', host, guest, gameId, firstPlayerId: host.playerId,
+    startedAt: Date.now(), moves, moveLimit: 400, results: [], pendingResults: [], rematchVotes: [], finished: null,
+  }))
+  const stats = openStats(join(directory, 'stats.json'))
+  const room = new Room({ directory }, host.playerId, stats, () => {})
+  assert.equal(room.snapshot().boardSize, 201)
+  assert.deepEqual(room.snapshot().moves, moves)
+  room.endGame(null, 'draw-agreed')
+  room.voteRematch(host.playerId)
+  room.voteRematch(guest.playerId)
+  assert.notEqual(room.saved.gameId, gameId)
+  assert.equal(room.snapshot().boardSize, 15)
+  assert.equal(room.snapshot().moveLimit, 0)
+  assert.equal(stats.summary().total.draws, 1)
+})
+
+test('a 15x15 snapshot rejects more than 225 moves or a move past an edge', () => {
+  const gameId = '00000000-0000-4000-8000-000000000003'
+  const meta = { boardSize: 15 }
+  assert.equal(beginState({ gameId, boardVersion: 226, parts: 3, meta }), null)
+  const snapshot = beginState({ gameId, boardVersion: 2, parts: 1, meta })
+  const moves = [{ x: 0, y: 0, mark: 'X' }, { x: 8, y: 0, mark: 'O' }]
+  assert.equal(addStatePart(snapshot, { index: 0, moves }), false)
 })
 
 test('a private room stops checking PINs after thirty failures across all addresses', t => {

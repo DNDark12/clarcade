@@ -6,9 +6,9 @@ Two-player Caro (Gomoku) on your LAN, inside Claude Code, while your agents work
 
 - Public or private rooms (4–6 digit PIN). Join by invite link, by room name or from a list of rooms on your LAN.
 - Two rule sets: **Freestyle** (the default; five or more in a row wins) and **Blocked ends** (a line blocked by the opponent at both ends does not win).
-- The board grows with the game, up to ±100 cells on each axis.
+- New games use a fixed 15×15 board. Filling it without a winner ends the game in a draw.
 - Undo requests, draw offers, resignation and rematches. The first player alternates between games.
-- Room options: a per-move clock, a move limit and how long to hold the room when the opponent disconnects.
+- Room options include a per-move clock and how long to hold the room when the opponent disconnects.
 - Statistics overall and per opponent: wins, losses, draws, streaks, and splits by rule set and by X/O.
 - English and Vietnamese interface.
 
@@ -22,7 +22,7 @@ Two-player Caro (Gomoku) on your LAN, inside Claude Code, while your agents work
 | Perl | `/usr/bin/perl` with `flock` support. The launcher uses it to keep a single background process running |
 | Network | Both machines on the same LAN. The firewall must allow UDP port 47979 and incoming TCP connections to Node |
 
-If Clarcade cannot find Node, enter its absolute path in **Settings → Advanced → Absolute Node path** (for example `/opt/homebrew/bin/node`).
+If Clarcade cannot find Node, enter its absolute path in **Settings → Advanced → Network** (for example `/opt/homebrew/bin/node`).
 
 ## Install
 
@@ -50,18 +50,16 @@ After installation, start a new Claude Code session and run `/clarcade`. The fir
 ### Create a room
 
 1. Run `/clarcade` → **Create room**.
-2. Enter a room name, choose the rules, public or private and the other options, then press **Create room**.
-3. Press **Copy link** and send the `clarcade://j/K7M2QX` link to the other player.
+2. Choose the rules and visibility, enter a room name and press **Create room**. Open **Room options** to change the turn clock or reconnect window.
+3. For a public room, the other player can select it from **Join room**. To send an invitation, press **Copy link**. For a private room, share the PIN separately.
 
-If the other player cannot find the room (office Wi-Fi or a network that blocks multicast), use **Copy link with address**. That link looks like `clarcade://j/K7M2QX@192.168.1.20:51234` and connects straight to your machine.
+If the other player cannot find the room, open **Connection help**, select your LAN address and press **Copy link**. The resulting link connects straight to your machine.
 
 ### Join a room
 
-There are three ways:
+Open **Join room** to see public rooms on your LAN. Select a room from the list, or enter the exact room name or an invite link in the search field. Private rooms ask for the PIN.
 
-- **Paste the link** into the prompt. When the whole message is a single Clarcade link, the mod joins the room and the message is not sent to the model. A link inside a sentence is sent as usual.
-- **Run** `/clarcade join <link>` or `/clarcade join <room name>`. A private room appears when you type its exact name, and the pane then asks for the PIN.
-- **Find a LAN room** in the pane to list public rooms on your network. The list refreshes while the pane is open.
+You can also run `/clarcade join <link|room name>` or paste an invite link on its own into the prompt.
 
 ### Placing stones and moving around the board
 
@@ -95,7 +93,7 @@ Each Claude Code thread loads its own copy of the mod, but all of them share one
 
 ## Settings
 
-Change these in the pane's **Settings** tab or in the plugin configuration in Claude Code.
+Change these in the pane's **Settings** tab or in the plugin configuration in Claude Code. Open **Advanced** for notifications and board settings, or **Advanced → Network** for connection settings.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -146,8 +144,8 @@ Then uninstall the plugin with `/plugin uninstall clarcade@clarcade`.
 
 | Problem | What to do |
 |---|---|
-| The room does not show up | Check that both machines are on the same network and use the same discovery port. Use **Copy link with address** if the network blocks multicast |
-| Node cannot be found | Enter the absolute Node path in Settings → Advanced, then press **Reconnect** |
+| The room does not show up | Check that both machines are on the same network and use the same discovery port. Open **Connection help**, select your LAN address and press **Copy link** if discovery fails |
+| Node cannot be found | Enter the absolute Node path in Settings → Advanced → Network, then press **Reconnect** |
 | Lost connection to the background process | Press **Reconnect**. If it keeps failing, check `daemon.log` |
 | The board is larger than the pane | Scroll with the arrow keys; `C` jumps to the last move |
 

@@ -1,4 +1,5 @@
 import { createDaemonClient } from './daemon-client.js'
+import { LEGACY_BOARD_SIZE, validCoordinate } from '../games/gomoku/rules.js'
 import { defaultName } from './identity.ts'
 import { errorText, languageOf, resultReason, words } from './i18n.ts'
 import { parseLink, roomLinks } from './link.js'
@@ -8,15 +9,17 @@ import { readSettings, saveSettings, validName } from './settings.ts'
 
 const PANE = 'clarcade'
 const ART = { joined: 'turn', turn: 'turn', finished: 'win', rematch: 'turn' }
-const HOST_DEFAULTS = { holdMs: 1800000, ruleset: 'freestyle', visibility: 'public', turnMs: 0, moveLimit: 0, hostPin: '' }
+const HOST_DEFAULTS = {
+  holdMs: 1800000, ruleset: 'freestyle', visibility: 'public', turnMs: 0, hostPin: '', hostAdvanced: false,
+}
 
 function createController(options) {
   const ui = {
     tab: 'home', settings: { language: 'en', playerName: '' },
-    nameDraft: '', roomDraft: '', linkDraft: '', portDraft: '', nodeDraft: '',
-    room: null, rooms: [], filter: '', search: false, busy: false, notice: '', error: '',
-    ...HOST_DEFAULTS, joinPin: '', pinLink: null, nameQuery: '', discoveryName: '', selectedOpponent: null,
-    copyFallback: '', confirm: null, view: null, advanced: false, firewallHelp: false,
+    nameDraft: '', roomDraft: '', joinDraft: '', portDraft: '', nodeDraft: '',
+    room: null, rooms: null, roomSearchError: '', busy: false, notice: '', error: '',
+    ...HOST_DEFAULTS, joinPin: '', pinLink: null, discoveryName: '', selectedOpponent: null,
+    copyFallback: '', inviteAddress: '', confirm: null, view: null, advanced: false, network: false, firewallHelp: false,
     stats: null, headToHead: null, now: 0, surface: null, visible: false, helperDown: false, nodeMissing: false,
   }
   let setup
@@ -25,7 +28,7 @@ function createController(options) {
   let version
   let pendingJoin
   let refreshJob
-  let scanJob
+  let scanJob: { roomName: string; promise?: Promise<void> } | undefined
   let elapsed = 0
   let discoveryElapsed = 0
   const t = () => words(ui.settings.language)
@@ -83,7 +86,7 @@ function createController(options) {
         }
         if (!snapshot) return
         const previous = ui.room
-        const latest = snapshot.room
+        const latest = snapshot.room && { boardSize: LEGACY_BOARD_SIZE, ...snapshot.room }
         version = snapshot.version
         ui.helperDown = false
         ui.room = latest
@@ -91,6 +94,8 @@ function createController(options) {
           ui.tab = latest ? 'game' : 'home'
           ui.confirm = null
           ui.copyFallback = ''
+          ui.inviteAddress = ''
+          ui.firewallHelp = false
           if (!latest) Object.assign(ui, HOST_DEFAULTS)
         }
         if (previous?.gameId !== latest?.gameId) ui.view = null
@@ -156,37 +161,47 @@ function createController(options) {
     ui.headToHead = ui.stats?.opponents?.find(player => player.playerId === opponent?.playerId) ?? null
   }
 
-  async function discover(api, roomName = ui.discoveryName, joinIfUnique = false) {
-    ui.search = true
-    ui.discoveryName = roomName
-    if (scanJob) {
-      await scanJob
-      if (ui.discoveryName !== roomName) return
-    }
-    scanJob = (async () => {
+  function discover(api, joinIfUnique = false) {
+    const roomName = ui.discoveryName
+    if (!joinIfUnique && scanJob?.roomName === roomName && scanJob.promise) return scanJob.promise
+    const scan: NonNullable<typeof scanJob> = { roomName }
+    scanJob = scan
+    const active = () => scanJob === scan && ui.tab === 'join' && !ui.pinLink && !ui.room
+    scan.promise = (async () => {
       try {
         const query = roomName ? `?name=${encodeURIComponent(roomName)}` : ''
         const { rooms } = await fetch(api, `/rooms${query}`)
-        if (ui.discoveryName !== roomName) return
+        if (!active()) return
         ui.rooms = rooms
+        ui.roomSearchError = ''
         if (joinIfUnique && rooms.length === 1 && rooms[0].status === 'waiting') {
           const item = rooms[0]
           await join(api, roomLinks(item.roomCode, item.address, item.port).directLink)
-        } else if (!ui.pinLink && !ui.busy) ui.error = ''
+        }
       } catch (error) {
-        ui.error = errorText(error.reason ?? 'daemon-unavailable', t())
+        if (!active()) return
+        ui.roomSearchError = errorText(error.reason ?? 'daemon-unavailable', t())
       }
       draw(api)
-    })().finally(() => { scanJob = undefined })
-    return scanJob
+    })().finally(() => { if (scanJob === scan) scanJob = undefined })
+    return scan.promise
   }
 
-  function findByName(api, value, joinIfUnique = false) {
-    if (!validName(value)) return invalid(api, t().badName)
-    ui.nameQuery = value.trim()
-    ui.filter = ''
+  function findTarget(api, value: string) {
+    const target = value.trim()
     ui.tab = 'join'
-    return discover(api, ui.nameQuery, joinIfUnique)
+    ui.joinDraft = target
+    scanJob = undefined
+    if (parseLink(target)) return join(api, target)
+    if (/^clarcade:/i.test(target)) return invalid(api, t().invalidLink)
+    if (target && !validName(target)) return invalid(api, t().badName)
+    ui.error = ''
+    ui.notice = ''
+    ui.discoveryName = target
+    ui.rooms = null
+    ui.roomSearchError = ''
+    draw(api)
+    return discover(api, Boolean(target))
   }
 
   async function tick(api) {
@@ -195,7 +210,7 @@ function createController(options) {
     const pane = panes?.find(item => item.id === PANE)
     const shown = pane ? pane.isShown : ui.visible
     if (shown || elapsed % 3 === 0) await refresh(api)
-    if (shown && ui.tab === 'join' && ui.search && !ui.room && ++discoveryElapsed % 2 === 0) {
+    if (shown && ui.tab === 'join' && !ui.pinLink && !ui.room && !ui.busy && ++discoveryElapsed % 2 === 0) {
       await discover(api)
     }
   }
@@ -223,21 +238,20 @@ function createController(options) {
 
   function join(api, link, pin) {
     if (!parseLink(link)) return invalid(api, t().invalidLink)
-    ui.linkDraft = link.trim()
+    const target = link.trim()
     ui.tab = 'join'
-    if (ui.pinLink !== ui.linkDraft) {
+    if (ui.pinLink !== target) {
       ui.pinLink = null
       ui.joinPin = ''
     }
     if (pin !== undefined && !/^[0-9]{4,6}$/.test(pin)) return invalid(api, t().pin)
     if (!ui.settings.playerName) {
-      pendingJoin = ui.linkDraft
+      pendingJoin = target
       ui.tab = 'join'
       draw(api)
       return
     }
     return run(api, async () => {
-      const target = ui.linkDraft
       try {
         await fetch(api, '/join', { link: target, name: ui.settings.playerName, ...(pin !== undefined && { pin }) })
       } catch (error) {
@@ -265,15 +279,18 @@ function createController(options) {
     return {
       edit(key, value) { ui[key] = value; draw(api) },
       async tab(key) {
-        ui.tab = key === 'discover' ? 'join' : key
-        if (key === 'join') ui.search = false
+        ui.tab = key
+        ui.confirm = null
+        if (key === 'join') {
+          ui.pinLink = null
+          ui.joinPin = ''
+          return findTarget(api, '')
+        }
         ui.error = ''
         ui.notice = ''
-        ui.confirm = null
         draw(api)
         await focus(api)
         if (key === 'stats') await this.stats()
-        if (key === 'discover') await this.discover()
       },
       async saveName(value) {
         if (!validName(value)) return invalid(api, t().badName)
@@ -296,7 +313,7 @@ function createController(options) {
         return run(api, async () => {
           await fetch(api, '/host', {
             roomName, name: ui.settings.playerName, holdMs: ui.holdMs,
-            ruleset: ui.ruleset, visibility: ui.visibility, turnMs: ui.turnMs, moveLimit: ui.moveLimit,
+            ruleset: ui.ruleset, visibility: ui.visibility, turnMs: ui.turnMs,
             ...(ui.visibility === 'private' && { pin: ui.hostPin }),
           })
           ui.hostPin = ''
@@ -305,8 +322,7 @@ function createController(options) {
       },
       join(link) { return join(api, link) },
       submitPin(pin) { if (ui.pinLink) return join(api, ui.pinLink, pin) },
-      findByName(value) { return findByName(api, value) },
-      discover() { ui.filter = ''; ui.tab = 'join'; return discover(api, '') },
+      findTarget(value) { return findTarget(api, value) },
       recover() {
         return run(api, async () => {
           await client.start({ retryNode: true })
@@ -372,7 +388,7 @@ function createController(options) {
     }
   }
 
-  return { ui, t, draw, load, focus, refresh, tick, open, join, findByName, invalid, actions, run, fetch, play }
+  return { ui, t, draw, load, focus, refresh, tick, open, findTarget, invalid, actions, run, fetch, play }
 }
 
 function capabilities($) {
@@ -413,7 +429,7 @@ function capabilities($) {
 
 export function register(on, options = {}) {
   const controller = createController(options)
-  const { ui, t, draw, load, focus, refresh, tick, open, join, findByName, invalid, actions, run, fetch, play } = controller
+  const { ui, t, draw, load, focus, refresh, tick, open, findTarget, invalid, actions, run, fetch, play } = controller
   let timer
   let booted
   let attached
@@ -478,9 +494,7 @@ export function register(on, options = {}) {
     watch(capabilities($))
     if (match && attached !== 'vscode' && attached !== 'mobile') {
       const api = capabilities($)
-      const target = match[1].trim()
-      if (parseLink(target)) await join(api, target)
-      else await findByName(api, target, true)
+      await findTarget(api, match[1])
     }
     if (!opened.isPlaced) return { text: t().fallback, isTextDisplayOnly: true }
     return {}
@@ -493,7 +507,7 @@ export function register(on, options = {}) {
     try {
       await open(capabilities($))
       watch(capabilities($))
-      await join(capabilities($), event.text)
+      await findTarget(capabilities($), event.text)
     } catch { invalid(capabilities($), t().unavailable) }
     return { drop: t().connecting }
   })
@@ -542,7 +556,7 @@ export function register(on, options = {}) {
       return {}
     }
     if (room.status === 'playing' && room.connection === 'connected' && room.turn === room.mark &&
-        !room.pendingMove && Math.abs(data.x) <= 100 && Math.abs(data.y) <= 100) {
+        !room.pendingMove && validCoordinate(data.x, room.boardSize) && validCoordinate(data.y, room.boardSize)) {
       await run(capabilities($), async () => {
         const { gameId, boardVersion, moveEpoch = 0 } = room
         if (data.boardVersion !== boardVersion || data.moveEpoch !== moveEpoch) return

@@ -27,10 +27,11 @@ export function lobby(elements, event, ui, actions, t) {
     key, label, onPress, ...(primary && { variant: 'primary' }),
   })
   const text = (children, extra = {}) => Text({ children, ...extra })
-  const column = children => Box({ flexDirection: 'column', children: children.filter(Boolean) })
+  const column = (children, gap?: 'xs' | 'sm') =>
+    Box({ flexDirection: 'column', gap, children: children.filter(Boolean) })
   const row = (children, spacing = {}) =>
     Box({ flexDirection: 'row', flexWrap: 'wrap', children: children.filter(Boolean), ...spacing })
-  const actionRow = children => row(children, { columnGap: 'sm', rowGap: 'xs', marginTop: 'xs' })
+  const actionRow = children => row(children, { gap: 'sm' })
   const input = (key, label, value, onInput, onSubmit, submitLabel = t.save) =>
     Input({ key, label, value, onInput, onSubmit, submitLabel })
   const edit = key => value => actions.edit(key, value)
@@ -55,8 +56,7 @@ export function lobby(elements, event, ui, actions, t) {
     return column([
       header(), text(t.intro), feedback,
       input('player-name', t.name, ui.nameDraft, edit('nameDraft'), actions.saveName),
-      button('save-player-name', t.save, () => actions.saveName(ui.nameDraft), true),
-    ])
+    ], 'sm')
   }
   const tabs = [[room ? 'game' : 'home', room ? t.game : t.home], ['stats', t.stats], ['settings', t.settings]]
   return column([
@@ -66,9 +66,13 @@ export function lobby(elements, event, ui, actions, t) {
     ...(ui.tab === 'stats' ? statistics() : ui.tab === 'settings' ? settings() :
       room ? game() : ui.tab === 'join' ? join() : ui.tab === 'host' ? host() : home()),
     ui.tab === 'home' && nav(),
-  ])
+  ], ui.tab === 'game' && room?.status !== 'waiting' ? undefined : 'sm')
 
   function nav() {
+    if (ui.tab === 'join' && ui.pinLink) return null
+    if (ui.tab !== 'home' && ui.tab !== 'game') {
+      return actionRow([button(room ? 'tab-game' : 'tab-home', t.back, () => actions.tab(room ? 'game' : 'home'))])
+    }
     return actionRow(tabs.filter(([key]) => key !== ui.tab).map(([key, label]) =>
       button(`tab-${key}`, label, () => actions.tab(key))))
   }
@@ -89,13 +93,10 @@ export function lobby(elements, event, ui, actions, t) {
   }
 
   function home() {
-    const cards = [
-      ['host', t.create, t.hostHint], ['join', t.joinByLink, t.joinHint], ['discover', t.findLan, t.findHint],
-    ]
-    return [Box({ flexDirection: 'column', gap: 'sm', children: cards.map(([key, title, hint]) => Box({
-      flexDirection: 'column', borderStyle: 'single', borderColor: 'inactive', paddingX: 1,
-      children: [button(`tab-${key}`, title, () => actions.tab(key), key === 'host'), text(hint, { dimColor: true })],
-    })) })]
+    return [actionRow([
+      button('tab-host', t.create, () => actions.tab('host'), true),
+      button('tab-join', t.join, () => actions.tab('join')),
+    ])]
   }
 
   function playerBar() {
@@ -120,61 +121,69 @@ export function lobby(elements, event, ui, actions, t) {
     return compact ? column([row([hostSide, score]), guestSide]) : row([hostSide, score, guestSide])
   }
 
-  function choices(key, label, options, current, select = edit(key)) {
-    return [text(label, { dimColor: true }), actionRow(options.map(([value, title]) =>
-      button(`${key}-${value}`, title, () => select(value), current === value)))]
+  function picker<T extends string | number | boolean>(
+    key: string, label: string, options: [T, string][], current: T, select = edit(key),
+  ) {
+    return Select({
+      key, label, value: String(current),
+      options: options.map(([value, label]) => ({ value: String(value), label })),
+      onSelect: (value: string) => {
+        const option = options.find(([candidate]) => String(candidate) === value)
+        if (option) select(option[0])
+      },
+    })
   }
 
   function host() {
     return [
       text(t.chooseHost, { bold: true }),
+      column([
+        picker('ruleset', t.rules, [['freestyle', t.freestyle], ['vn', t.caro]], ui.ruleset),
+        text(ui.ruleset === 'vn' ? t.caroRule : t.freestyleRule, { dimColor: true }),
+      ]),
+      picker('visibility', t.visibility, [['public', t.public], ['private', t.private]], ui.visibility),
+      ui.visibility === 'private' && input('host-pin', t.pin, ui.hostPin, edit('hostPin'), edit('hostPin'), t.setPin),
+      button('toggle-room-options', `${ui.hostAdvanced ? '▾' : '▸'} ${t.roomOptions}`,
+        () => actions.edit('hostAdvanced', !ui.hostAdvanced)),
+      ui.hostAdvanced && column([
+        picker('turnMs', t.turnClock, [[0, t.off], [30000, `30 ${t.seconds}`], [60000, `1 ${t.minutes}`],
+          [120000, `2 ${t.minutes}`], [300000, `5 ${t.minutes}`]], ui.turnMs),
+        picker('holdMs', t.hold, [[300000, `5 ${t.minutes}`], [1800000, `30 ${t.minutes}`],
+          [7200000, `2 ${t.hours}`]], ui.holdMs),
+      ], 'xs'),
       input('room-name', t.room, ui.roomDraft, edit('roomDraft'), actions.host, t.create),
-      Select ? Select({ key: 'ruleset', label: t.rules, value: ui.ruleset,
-        options: [{ value: 'freestyle', label: t.freestyle }, { value: 'vn', label: t.caro }],
-        onSelect: edit('ruleset') }) : column(choices('ruleset', t.rules,
-        [['freestyle', t.freestyle], ['vn', t.caro]], ui.ruleset)),
-      text(ui.ruleset === 'vn' ? t.caroRule : t.freestyleRule, { dimColor: true }),
-      ...choices('visibility', t.visibility, [['public', t.public], ['private', t.private]], ui.visibility),
-      ui.visibility === 'private' && input('host-pin', t.pin, ui.hostPin, edit('hostPin'),
-        value => actions.edit('hostPin', value)),
-      ...choices('turnMs', t.turnClock, [[0, t.off], [30000, `30 ${t.seconds}`], [60000, `1 ${t.minutes}`],
-        [120000, `2 ${t.minutes}`], [300000, `5 ${t.minutes}`]], ui.turnMs),
-      ...choices('moveLimit', t.moveLimit, [[0, t.off], [200, '200'], [400, '400']], ui.moveLimit),
-      ...choices('holdMs', t.hold, [[300000, `5 ${t.minutes}`], [1800000, `30 ${t.minutes}`],
-        [7200000, `2 ${t.hours}`]], ui.holdMs),
-      button('create-room', t.create, () => actions.host(ui.roomDraft), true),
     ]
   }
 
   function join() {
-    const rooms = ui.rooms.filter(item => item.roomName.toLowerCase().includes(ui.filter.trim().toLowerCase()))
-    const hint = ui.busy ? t.loading : ui.search ? t.noRooms : t.readyRooms
+    if (ui.pinLink) return [
+      button('back-to-rooms', t.backToRooms, () => actions.tab('join')),
+      input('join-pin', t.pin, ui.joinPin, edit('joinPin'), actions.submitPin, t.join),
+    ]
+    const empty = ui.rooms === null ? t.loading : ui.discoveryName ? t.noNamedRooms : t.noPublicRooms
     return [
-      (!ui.search || ui.pinLink) && input('join-link', t.link, ui.linkDraft, edit('linkDraft'), actions.join, t.join),
-      actionRow([
-        !ui.search && button('join-link-submit', t.join, () => actions.join(ui.linkDraft), true),
-        button('discover', ui.search ? t.refresh : t.discover, actions.discover),
-      ]),
-      ui.pinLink && input('join-pin', t.pin, ui.joinPin, edit('joinPin'), actions.submitPin, t.join),
-      ui.search && !ui.discoveryName && input('filter', t.filter, ui.filter, edit('filter'), edit('filter')),
-      input('find-name', t.roomSearch, ui.nameQuery, edit('nameQuery'), actions.findByName, t.findName),
-      ui.discoveryName && text(`${t.roomSearch} · ${ui.discoveryName}`, { dimColor: true }),
-      ...(ui.search && rooms.length ? rooms.map(item => {
-        const state = item.status === 'waiting' ? t.waiting : t.full
-        const label = `${item.roomName} · ${item.hostName} · ${ruleText(item.ruleset, t)} · ${item.visibility === 'private' ? t.private : t.public} · ${state} · ${item.latencyMs} ms`
-        return item.status === 'waiting' ? button(`join-${item.roomCode}-${item.address}-${item.port}`, label,
-          () => actions.join(roomLinks(item.roomCode, item.address, item.port).directLink)) : text(label, { dimColor: true })
-      }) : [text(hint, { dimColor: true })]),
+      input('join-target', t.roomOrLink, ui.joinDraft, edit('joinDraft'), actions.findTarget, t.findOrJoin),
+      ui.discoveryName && button('back-to-rooms', t.showPublicRooms, () => actions.tab('join')),
+      ui.roomSearchError ? notice(ui.roomSearchError, 'error') :
+        ui.rooms?.length ? column(ui.rooms.map(item => {
+          const label = [item.roomName, item.hostName, ruleText(item.ruleset, t),
+            item.visibility === 'private' && t.private].filter(Boolean).join(' · ')
+          return item.status === 'waiting' ? button(`join-${item.roomCode}-${item.address}-${item.port}`, label,
+            () => actions.join(roomLinks(item.roomCode, item.address, item.port).directLink)) :
+            text(`${label} · ${t.full}`, { dimColor: true })
+        }), 'xs') : text(empty, { dimColor: true }),
     ]
   }
 
   function game() {
     if (room.status === 'waiting') return [
       notice(roomStatus(room, t)),
-      text(event.surface === 'desktop' ? room.roomCode : [...room.roomCode].join(' '), { bold: true, size: 'title' }),
-      text(room.visibility === 'private' ? t.private : t.public, { dimColor: true }), ...inviteButtons(),
-      button('firewall-help', t.firewallTitle, () => actions.edit('firewallHelp', !ui.firewallHelp)),
-      ui.firewallHelp && text(t.firewall, { dimColor: true }), ...leaveControls(t.cancel),
+      column([
+        text(room.visibility === 'private' ? t.private : t.public, { bold: true }),
+        text(room.visibility === 'private' ? t.privateInvite : t.publicInvite, { dimColor: true }),
+      ]),
+      ...inviteControls(),
+      ...leaveControls(t.cancel),
     ]
     const outcome = room.finished && (room.finished.winner === null ? t.draw :
       room.finished.winner === (room.role === 'host' ? room.host.playerId : room.guest.playerId) ? t.win : t.loss)
@@ -182,7 +191,7 @@ export function lobby(elements, event, ui, actions, t) {
     const secondsLeft = room.turnEndsAt == null ? null : Math.max(0, Math.ceil((room.turnEndsAt - ui.now) / 1000))
     const canMove = room.status === 'playing' && room.connection === 'connected' &&
       room.mark === room.turn && !room.pendingMove && !ui.busy && secondsLeft !== 0
-    const rows = Math.max(7, Math.min(29, (event.props.scroll?.bodyRows || 23) - 5))
+    const rows = Math.max(7, Math.min(32, (event.props.scroll?.bodyRows || 23) - 5))
     const contents = boardProps(room, ui.view, canMove, columns, rows, ui.settings, event.surface === 'desktop')
     const myId = room.role === 'host' ? room.host.playerId : room.guest?.playerId
     const voted = room.rematchVotes.includes(myId)
@@ -204,14 +213,16 @@ export function lobby(elements, event, ui, actions, t) {
         key: 'board', module: '../games/gomoku/board.client.tsx', width: '100%', height: contents.lines,
         props: contents,
       }),
-      ...(room.status === 'playing' && room.connection === 'connected' ? gameActions(room, myId) : []),
-      room.status === 'finished' && (voted ? text(`${t.waitingVote} · ${room.role === 'host' ? room.guest.name : room.host.name}`) :
-        room.connection === 'connected' && button('rematch', t.rematch, () => actions.action('rematch'), true)),
-      canClaim && notice(t.holdExpired, 'warning', actionRow([
-        button('extend-hold', t.wait, () => actions.action('extend')),
-        button('claim-win', t.claim, () => actions.action('claim'), true),
-      ])),
-      ...leaveControls(t.leave),
+      column([
+        ...(room.status === 'playing' && room.connection === 'connected' ? gameActions(room, myId) : []),
+        room.status === 'finished' && (voted ? text(`${t.waitingVote} · ${room.role === 'host' ? room.guest.name : room.host.name}`) :
+          room.connection === 'connected' && button('rematch', t.rematch, () => actions.action('rematch'), true)),
+        canClaim && notice(t.holdExpired, 'warning', actionRow([
+          button('extend-hold', t.wait, () => actions.action('extend')),
+          button('claim-win', t.claim, () => actions.action('claim'), true),
+        ])),
+        ...leaveControls(t.leave),
+      ], 'xs'),
     ]
   }
 
@@ -233,14 +244,25 @@ export function lobby(elements, event, ui, actions, t) {
     ]
   }
 
-  function inviteButtons() {
+  function inviteControls() {
+    const directLinks: { address: string; link: string }[] = room.directLinks ??
+      (room.address && room.directLink ? [{ address: room.address, link: room.directLink }] : [])
+    const link = directLinks.find(item => item.address === ui.inviteAddress)?.link ?? room.link
     return [
       actionRow([
-        button('copy-link', t.copy, e => actions.copy(room.link, e.surface), true),
-        room.directLink && button('copy-direct', t.copyDirect, e => actions.copy(room.directLink, e.surface)),
-        ...(room.directLinks ?? []).filter(item => item.link !== room.directLink).map(item =>
-          button(`copy-${item.address}`, `${t.copy} · ${item.address}`, e => actions.copy(item.link, e.surface))),
+        button('copy-link', t.copy, e => actions.copy(link, e.surface), true),
+        button('firewall-help', `${ui.firewallHelp ? '▾' : '▸'} ${t.connectionHelp}`,
+          () => actions.edit('firewallHelp', !ui.firewallHelp)),
       ]),
+      ui.firewallHelp && column([
+        directLinks.length > 0 && Select({
+          key: 'invite-address', label: t.inviteAddress, value: ui.inviteAddress,
+          options: [{ value: '', label: t.lanDiscovery }, ...directLinks.map(({ address }) => ({ value: address, label: address }))],
+          onSelect: edit('inviteAddress'),
+        }),
+        directLinks.length > 0 && text(t.directInvite, { dimColor: true }),
+        text(t.firewall, { dimColor: true }),
+      ], 'xs'),
       ui.copyFallback && notice(ui.copyFallback),
     ]
   }
@@ -282,37 +304,28 @@ export function lobby(elements, event, ui, actions, t) {
 
   function settings() {
     const current = ui.settings
+    const set = (key: string) => (value: string | number | boolean) => actions.setting(key, value)
+    const switchOptions: [boolean, string][] = [[true, t.on], [false, t.off]]
     return [
       input('player-name', t.name, ui.nameDraft, edit('nameDraft'), actions.saveName),
-      button('save-player-name', t.save, () => actions.saveName(ui.nameDraft)),
-      text(t.language, { bold: true }),
-      actionRow([['auto', t.system], ['en', 'English'], ['vi', 'Tiếng Việt']]
-        .map(([value, label]) => button(`language-${value}`, label, () => actions.setting('language', value),
-          current.preference === value))),
-      text(t.sounds, { bold: true }),
-      actionRow([true, false].map(value => button(`sounds-${value}`, value ? t.on : t.off,
-        () => actions.setting('sounds', value), current.sounds === value))),
-      Select ? Select({ key: 'notifications', label: t.notifications, value: current.notifications,
-        options: ['toast', 'sound', 'band', 'off'].map(value => ({ value, label: t[value] })),
-        onSelect: value => actions.setting('notifications', value) }) : column(choices('notification', t.notifications,
-        ['toast', 'sound', 'band', 'off'].map(value => [value, t[value]]), current.notifications,
-        value => actions.setting('notifications', value))),
-      section(t.display, [
-        ...choices('board', t.board, [['grid', t.grid], ['dots', t.dots]], current.board,
-          value => actions.setting('board', value)),
-        ...choices('pieces', t.pieces, [['xo', event.surface === 'desktop' ? '✕ / ○' : 'X / O'], ['oo', '● / ○'], ['pixel', '■ / □']], current.pieces,
-          value => actions.setting('pieces', value)),
-        event.surface === 'terminal' && text(t.glyphHint, { dimColor: true }),
-      ]),
+      picker('language', t.language, [['auto', t.system], ['en', 'English'], ['vi', 'Tiếng Việt']],
+        current.preference, set('language')),
+      picker('sounds', t.sounds, switchOptions, current.sounds, set('sounds')),
       button('toggle-advanced', `${ui.advanced ? '▾' : '▸'} ${t.advanced}`, () => actions.edit('advanced', !ui.advanced)),
       ...(ui.advanced ? [
-        input('udp-port', t.udpPort, ui.portDraft, edit('portDraft'), value => actions.setting('udpPort', value)),
-        input('node-path', t.nodePath, ui.nodeDraft, edit('nodeDraft'), value => actions.setting('nodePath', value)),
-        ...choices('allowTailscale', t.tailscale, [[false, t.off], [true, t.on]], current.allowTailscale,
-          value => actions.setting('allowTailscale', value)),
-        ...choices('allowIpv6Ula', t.ula, [[false, t.off], [true, t.on]], current.allowIpv6Ula,
-          value => actions.setting('allowIpv6Ula', value)),
-        text(t.restartToApply, { dimColor: true }),
+        picker('notifications', t.notifications, ['toast', 'sound', 'band', 'off'].map(value => [value, t[value]]),
+          current.notifications, set('notifications')),
+        picker('board', t.board, [['grid', t.grid], ['dots', t.dots]], current.board, set('board')),
+        picker('pieces', t.pieces, [['xo', event.surface === 'desktop' ? '✕ / ○' : 'X / O'], ['oo', '● / ○'], ['pixel', '■ / □']],
+          current.pieces, set('pieces')),
+        event.surface === 'terminal' && current.pieces !== 'xo' && text(t.glyphHint, { dimColor: true }),
+        button('toggle-network', `${ui.network ? '▾' : '▸'} ${t.network}`, () => actions.edit('network', !ui.network)),
+        ...(ui.network ? [
+          input('udp-port', t.udpPort, ui.portDraft, edit('portDraft'), set('udpPort')),
+          input('node-path', t.nodePath, ui.nodeDraft, edit('nodeDraft'), set('nodePath')),
+          picker('allowTailscale', t.tailscale, switchOptions, current.allowTailscale, set('allowTailscale')),
+          picker('allowIpv6Ula', t.ula, switchOptions, current.allowIpv6Ula, set('allowIpv6Ula')),
+        ] : []),
       ] : []),
     ]
   }
