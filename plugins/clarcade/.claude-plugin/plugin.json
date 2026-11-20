@@ -1,0 +1,106 @@
+{
+  "name": "clarcade",
+  "displayName": "Clarcade",
+  "version": "0.1.0",
+  "description": "Caro (Gomoku) for two players on your LAN while Claude Code works.",
+  "author": {
+    "name": "DNDark",
+    "email": "dnq.exorcist@gmail.com",
+    "url": "https://github.com/DNDark12"
+  },
+  "homepage": "https://github.com/DNDark12/clarcade",
+  "repository": "https://github.com/DNDark12/clarcade",
+  "license": "MIT",
+  "keywords": [
+    "game",
+    "caro",
+    "gomoku",
+    "lan",
+    "multiplayer"
+  ],
+  "engines": {
+    "claude-code": ">=2.1.319"
+  },
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "options": [
+        "auto",
+        "en",
+        "vi"
+      ],
+      "default": "auto",
+      "description": "Follow the system locale or choose English or Vietnamese."
+    },
+    "sounds": {
+      "type": "boolean",
+      "title": "Sounds",
+      "default": true,
+      "description": "Play Clarcade sound effects."
+    },
+    "notifications": {
+      "type": "string",
+      "title": "Turn notifications",
+      "options": [
+        "toast",
+        "sound",
+        "band",
+        "off"
+      ],
+      "default": "band",
+      "description": "Choose how Clarcade announces your turn."
+    },
+    "nickname": {
+      "type": "string",
+      "title": "Player name",
+      "default": "",
+      "description": "Name shown to the other player."
+    },
+    "udpPort": {
+      "type": "number",
+      "title": "LAN discovery port",
+      "default": 47979,
+      "description": "Port shared by players for LAN discovery."
+    },
+    "nodePath": {
+      "type": "string",
+      "title": "Absolute path to Node",
+      "default": "",
+      "description": "Leave blank to discover Node automatically."
+    },
+    "allowTailscale": {
+      "type": "boolean",
+      "title": "Allow Tailscale IPv4",
+      "default": false,
+      "description": "Allow connections to and from the 100.64.0.0/10 range. Applies when no room is open."
+    },
+    "allowIpv6Ula": {
+      "type": "boolean",
+      "title": "Allow IPv6 ULA",
+      "default": false,
+      "description": "Allow direct links and connections to and from fd00::/8. Applies when no room is open."
+    },
+    "board": {
+      "type": "string",
+      "title": "Board style",
+      "options": [
+        "grid",
+        "dots"
+      ],
+      "default": "grid",
+      "description": "Draw the board as a square grid or dots."
+    },
+    "pieces": {
+      "type": "string",
+      "title": "Piece style",
+      "options": [
+        "xo",
+        "oo",
+        "pixel"
+      ],
+      "default": "xo",
+      "description": "Draw pieces as X/O, circles, or squares."
+    }
+  }
+}

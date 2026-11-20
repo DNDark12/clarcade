@@ -1,0 +1,7 @@
+# Working notes and guides kept on the development machine
+docs/
+# State files set aside after a failed read
+*.corrupt-*
+.DS_Store
+node_modules/
+*.log

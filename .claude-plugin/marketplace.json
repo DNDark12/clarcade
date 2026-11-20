@@ -1,0 +1,17 @@
+{
+  "name": "clarcade",
+  "owner": {
+    "name": "DNDark"
+  },
+  "metadata": {
+    "description": "Clarcade: short two-player LAN games inside Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "clarcade",
+      "source": "./plugins/clarcade",
+      "description": "Caro (Gomoku) for two players on your LAN while Claude Code works.",
+      "displayName": "Clarcade"
+    }
+  ]
+}

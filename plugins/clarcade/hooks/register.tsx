@@ -1,0 +1,556 @@
+import { createDaemonClient } from './daemon-client.js'
+import { defaultName } from './identity.ts'
+import { errorText, languageOf, resultReason, words } from './i18n.ts'
+import { parseLink, roomLinks } from './link.js'
+import { lobby, roomStatus, scoreLine } from './lobby.tsx'
+import { statusColor } from './ui/tokens.ts'
+import { readSettings, saveSettings, validName } from './settings.ts'
+
+const PANE = 'clarcade'
+const ART = { joined: 'turn', turn: 'turn', finished: 'win', rematch: 'turn' }
+const HOST_DEFAULTS = { holdMs: 1800000, ruleset: 'freestyle', visibility: 'public', turnMs: 0, moveLimit: 0, hostPin: '' }
+
+function createController(options) {
+  const ui = {
+    tab: 'home', settings: { language: 'en', playerName: '' },
+    nameDraft: '', roomDraft: '', linkDraft: '', portDraft: '', nodeDraft: '',
+    room: null, rooms: [], filter: '', search: false, busy: false, notice: '', error: '',
+    ...HOST_DEFAULTS, joinPin: '', pinLink: null, nameQuery: '', discoveryName: '', selectedOpponent: null,
+    copyFallback: '', confirm: null, view: null, advanced: false, firewallHelp: false,
+    stats: null, headToHead: null, now: 0, surface: null, visible: false, helperDown: false, nodeMissing: false,
+  }
+  let setup
+  let client
+  let lastAlert
+  let version
+  let pendingJoin
+  let refreshJob
+  let scanJob
+  let elapsed = 0
+  let discoveryElapsed = 0
+  const t = () => words(ui.settings.language)
+  const draw = api => api.ui.invalidate('ui.render')
+
+  function load(api) {
+    setup ??= (async () => {
+      ui.settings = await readSettings(api, options)
+      ui.nameDraft = ui.settings.playerName || await defaultName(api)
+      ui.portDraft = String(ui.settings.udpPort)
+      ui.nodeDraft = ui.settings.nodePath
+      client = createDaemonClient(api, ui.settings)
+    })().catch(error => {
+      setup = undefined
+      throw error
+    })
+    return setup
+  }
+
+  async function fetch(api, path, body) {
+    await load(api)
+    const response = await client.request(path, body)
+    if (response.status < 200 || response.status >= 300) {
+      throw Object.assign(new Error(response.body?.reason ?? 'daemon-unavailable'),
+        { reason: response.body?.reason ?? 'daemon-unavailable' })
+    }
+    return response.body
+  }
+
+  async function focus(api) {
+    if (!api.process?.run) return
+    try { await fetch(api, '/focus', {}) } catch { /* Idle helper starts only on discovery, host, or join. */ }
+  }
+
+  function status(api) {
+    api.ui.status(ui.surface !== 'desktop' && ui.room && ui.settings.notifications !== 'off' ?
+      `${t().title} · ${scoreLine(ui.room, ui.headToHead, t())}` : undefined)
+  }
+
+  function refresh(api, afterWrite = false) {
+    if (!api.process?.run) return Promise.resolve()
+    if (refreshJob) return afterWrite ? refreshJob.then(() => refresh(api)) : refreshJob
+    refreshJob = (async () => {
+      const now = await api.clock.now()
+      const wasExpired = ui.room?.disconnectedAt && ui.now - ui.room.disconnectedAt >= ui.room.holdMs
+      ui.now = now
+      if ((!wasExpired && ui.room?.disconnectedAt && now - ui.room.disconnectedAt >= ui.room.holdMs) ||
+          (ui.visible && (ui.room?.turnEndsAt ||
+            (ui.room?.status === 'playing' && ui.room.disconnectedAt)))) draw(api)
+      try {
+        const snapshot = await fetch(api, `/state${version ? `?v=${encodeURIComponent(version)}` : ''}`)
+        if (ui.nodeMissing) {
+          ui.nodeMissing = false
+          draw(api)
+        }
+        if (!snapshot) return
+        const previous = ui.room
+        const latest = snapshot.room
+        version = snapshot.version
+        ui.helperDown = false
+        ui.room = latest
+        if (previous?.roomCode !== latest?.roomCode) {
+          ui.tab = latest ? 'game' : 'home'
+          ui.confirm = null
+          ui.copyFallback = ''
+          if (!latest) Object.assign(ui, HOST_DEFAULTS)
+        }
+        if (previous?.gameId !== latest?.gameId) ui.view = null
+        if (previous?.guest?.playerId !== latest?.guest?.playerId || previous?.status !== latest?.status ||
+            latest?.status === 'finished' || ui.tab === 'stats') {
+          await updateStats(api)
+        }
+        status(api)
+        draw(api)
+        for (const event of snapshot.notifications ?? []) {
+          if (event.id === lastAlert || (!ART[event.event] && event.event !== 'action-rejected')) continue
+          const sequence = event.id.split(':')
+          const last = lastAlert?.split(':')
+          if (last?.[0] === sequence[0] && Number(last[1]) >= Number(sequence[1])) continue
+          lastAlert = event.id
+          if (event.event === 'action-rejected') invalid(api, t().invalidAction)
+          else announce(api, event.event)
+        }
+      } catch (error) {
+        version = undefined
+        if (error.reason === 'node-missing' && !ui.nodeMissing) {
+          ui.nodeMissing = true
+          draw(api)
+        }
+        if (ui.room && !ui.helperDown) {
+          ui.helperDown = true
+          ui.room = { ...ui.room, connection: 'reconnecting' }
+          status(api)
+          draw(api)
+        }
+      }
+    })().finally(() => { refreshJob = undefined })
+    return refreshJob
+  }
+
+  function announce(api, event) {
+    const mode = ui.settings.notifications
+    if (mode === 'off' || mode === 'band') return
+    const dictionary = t()
+    const room = ui.room
+    const finished = room?.finished
+    const player = room?.role === 'host' ? room.host : room?.guest
+    const opponent = room?.role === 'host' ? room.guest : room?.host
+    const outcome = finished && (finished.winner === null ? dictionary.draw :
+      finished.winner === player?.playerId ? dictionary.win : dictionary.loss)
+    const reason = finished && resultReason(finished.reason, dictionary)
+    const message = {
+      joined: opponent ? `${opponent.name} · ${dictionary.joined}` : dictionary.joined,
+      turn: dictionary.yours,
+      finished: outcome ? [outcome, reason].filter(Boolean).join(' · ') : dictionary.finished,
+    }
+    if (!ui.visible && message[event]) api.ui.toast(`${dictionary.title} · ${message[event]}`)
+    if (ui.settings.sounds && (mode === 'sound' || event === 'finished')) play(api, ART[event])
+  }
+
+  function play(api, clip) {
+    if (ui.settings.sounds) void api.audio.play({ asset: `sounds/${clip}.wav` }).catch(() => {})
+  }
+
+  async function updateStats(api) {
+    try { ui.stats = await fetch(api, '/stats') } catch { ui.stats = null }
+    const opponent = ui.room?.role === 'host' ? ui.room.guest : ui.room?.host
+    ui.headToHead = ui.stats?.opponents?.find(player => player.playerId === opponent?.playerId) ?? null
+  }
+
+  async function discover(api, roomName = ui.discoveryName, joinIfUnique = false) {
+    ui.search = true
+    ui.discoveryName = roomName
+    if (scanJob) {
+      await scanJob
+      if (ui.discoveryName !== roomName) return
+    }
+    scanJob = (async () => {
+      try {
+        const query = roomName ? `?name=${encodeURIComponent(roomName)}` : ''
+        const { rooms } = await fetch(api, `/rooms${query}`)
+        if (ui.discoveryName !== roomName) return
+        ui.rooms = rooms
+        if (joinIfUnique && rooms.length === 1 && rooms[0].status === 'waiting') {
+          const item = rooms[0]
+          await join(api, roomLinks(item.roomCode, item.address, item.port).directLink)
+        } else if (!ui.pinLink && !ui.busy) ui.error = ''
+      } catch (error) {
+        ui.error = errorText(error.reason ?? 'daemon-unavailable', t())
+      }
+      draw(api)
+    })().finally(() => { scanJob = undefined })
+    return scanJob
+  }
+
+  function findByName(api, value, joinIfUnique = false) {
+    if (!validName(value)) return invalid(api, t().badName)
+    ui.nameQuery = value.trim()
+    ui.filter = ''
+    ui.tab = 'join'
+    return discover(api, ui.nameQuery, joinIfUnique)
+  }
+
+  async function tick(api) {
+    elapsed++
+    const panes = await api.ui.panes().catch(() => [])
+    const pane = panes?.find(item => item.id === PANE)
+    const shown = pane ? pane.isShown : ui.visible
+    if (shown || elapsed % 3 === 0) await refresh(api)
+    if (shown && ui.tab === 'join' && ui.search && !ui.room && ++discoveryElapsed % 2 === 0) {
+      await discover(api)
+    }
+  }
+
+  async function run(api, operation) {
+    if (ui.busy) return
+    ui.busy = true
+    ui.error = ''
+    ui.notice = ''
+    draw(api)
+    try {
+      await operation()
+    } catch (error) {
+      ui.error = errorText(error.reason ?? 'daemon-unavailable', t())
+    } finally {
+      ui.busy = false
+      draw(api)
+    }
+  }
+
+  function invalid(api, message) {
+    ui.error = message
+    draw(api)
+  }
+
+  function join(api, link, pin) {
+    if (!parseLink(link)) return invalid(api, t().invalidLink)
+    ui.linkDraft = link.trim()
+    ui.tab = 'join'
+    if (ui.pinLink !== ui.linkDraft) {
+      ui.pinLink = null
+      ui.joinPin = ''
+    }
+    if (pin !== undefined && !/^[0-9]{4,6}$/.test(pin)) return invalid(api, t().pin)
+    if (!ui.settings.playerName) {
+      pendingJoin = ui.linkDraft
+      ui.tab = 'join'
+      draw(api)
+      return
+    }
+    return run(api, async () => {
+      const target = ui.linkDraft
+      try {
+        await fetch(api, '/join', { link: target, name: ui.settings.playerName, ...(pin !== undefined && { pin }) })
+      } catch (error) {
+        if (['pin-required', 'wrong-pin', 'pin-rate-limit'].includes(error.reason)) ui.pinLink = target
+        else ui.pinLink = null
+        throw error
+      } finally {
+        ui.joinPin = ''
+      }
+      ui.pinLink = null
+      await refresh(api, true)
+    })
+  }
+
+  async function open(api) {
+    await load(api)
+    const result = await api.ui.open({ id: PANE, title: 'Clarcade', focus: true })
+    ui.visible = result.isPlaced
+    await focus(api)
+    await refresh(api)
+    return result
+  }
+
+  function actions(api) {
+    return {
+      edit(key, value) { ui[key] = value; draw(api) },
+      async tab(key) {
+        ui.tab = key === 'discover' ? 'join' : key
+        if (key === 'join') ui.search = false
+        ui.error = ''
+        ui.notice = ''
+        ui.confirm = null
+        draw(api)
+        await focus(api)
+        if (key === 'stats') await this.stats()
+        if (key === 'discover') await this.discover()
+      },
+      async saveName(value) {
+        if (!validName(value)) return invalid(api, t().badName)
+        const playerName = value.trim()
+        await saveSettings(api, { playerName }, options)
+        ui.settings.playerName = playerName
+        ui.nameDraft = playerName
+        ui.error = ''
+        draw(api)
+        if (pendingJoin) {
+          const link = pendingJoin
+          pendingJoin = undefined
+          await join(api, link)
+        }
+      },
+      host(value) {
+        if (!validName(value)) return invalid(api, t().badName)
+        const roomName = value.trim()
+        if (ui.visibility === 'private' && !/^[0-9]{4,6}$/.test(ui.hostPin)) return invalid(api, t().pin)
+        return run(api, async () => {
+          await fetch(api, '/host', {
+            roomName, name: ui.settings.playerName, holdMs: ui.holdMs,
+            ruleset: ui.ruleset, visibility: ui.visibility, turnMs: ui.turnMs, moveLimit: ui.moveLimit,
+            ...(ui.visibility === 'private' && { pin: ui.hostPin }),
+          })
+          ui.hostPin = ''
+          await refresh(api, true)
+        })
+      },
+      join(link) { return join(api, link) },
+      submitPin(pin) { if (ui.pinLink) return join(api, ui.pinLink, pin) },
+      findByName(value) { return findByName(api, value) },
+      discover() { ui.filter = ''; ui.tab = 'join'; return discover(api, '') },
+      recover() {
+        return run(api, async () => {
+          await client.start({ retryNode: true })
+          ui.nodeMissing = false
+          await focus(api)
+          await refresh(api, true)
+        })
+      },
+      async copy(link, surface) {
+        if (!link) return
+        await focus(api)
+        let copied = false
+        try { copied = (await api.ui.copy({ text: link, surface })).isCopied } catch { /* Show the link. */ }
+        ui.copyFallback = copied ? '' : link
+        ui.notice = copied ? t().copied : ''
+        draw(api)
+      },
+      action(action, details = {}) {
+        if (!ui.room) return
+        return run(api, async () => {
+          const { gameId, moveEpoch, boardVersion } = ui.room
+          await fetch(api, '/action', { action, gameId, moveEpoch, boardVersion, ...details })
+          ui.confirm = null
+          await refresh(api, true)
+        })
+      },
+      async stats() {
+        await updateStats(api)
+        status(api)
+        draw(api)
+      },
+      async setting(key, value) {
+        const patch = {}
+        if (key === 'language') {
+          patch.language = value
+        } else if (key === 'udpPort') {
+          const port = Number(value)
+          if (!Number.isInteger(port) || port < 1 || port > 65535) return invalid(api, t().invalidPort)
+          patch.udpPort = port
+          ui.portDraft = String(port)
+        } else if (key === 'nodePath') {
+          const path = value.trim()
+          if (path && !path.startsWith('/')) return invalid(api, t().invalidPath)
+          patch.nodePath = path
+          ui.nodeDraft = path
+        } else patch[key] = value
+        await saveSettings(api, patch, options)
+        if (key === 'language') {
+          ui.settings.preference = value
+          ui.settings.language = languageOf(value, ui.settings.locale)
+        } else ui.settings[key] = patch[key]
+        if (['nodePath', 'udpPort', 'allowTailscale', 'allowIpv6Ula'].includes(key)) {
+          client = createDaemonClient(api, ui.settings)
+          if (key === 'nodePath') ui.nodeMissing = false
+          // The new client relocates the daemon, which restarts it with these settings when no room is open.
+          await refresh(api, true)
+          ui.notice = t().restartToApply
+        }
+        ui.error = ''
+        status(api)
+        draw(api)
+      },
+    }
+  }
+
+  return { ui, t, draw, load, focus, refresh, tick, open, join, findByName, invalid, actions, run, fetch, play }
+}
+
+function capabilities($) {
+  return {
+    plugin: { root: $.plugin.root },
+    session: { id: () => $.session.id() },
+    registerCommand: () => $.command.register({
+      name: 'clarcade', description: 'Open Clarcade or join with a Clarcade invitation',
+      argumentHint: 'join <link|room name>', immediate: true,
+    }),
+    store: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) },
+    process: { run: (argv, init) => $.process.run(argv, init) },
+    http: { fetch: (url, init) => $.http.fetch(url, init) },
+    env: {
+      get(key) {
+        if (key === 'CLAUDE_CONFIG_DIR') return $.env.get('CLAUDE_CONFIG_DIR')
+        if (key === 'LC_ALL') return $.env.get('LC_ALL')
+        if (key === 'LC_MESSAGES') return $.env.get('LC_MESSAGES')
+        return $.env.get('LANG')
+      },
+    },
+    clock: {
+      now: () => $.clock.now(),
+      after: (ms, callback) => $.clock.after(ms, callback),
+      every: (ms, callback) => $.clock.every(ms, callback),
+    },
+    audio: { play: clip => $.audio.play(clip) },
+    ui: {
+      invalidate: () => $.ui.invalidate('ui.render'),
+      status: text => $.ui.status(text),
+      toast: text => $.ui.toast(text),
+      panes: () => $.ui.panes(),
+      open: request => $.ui.open(request),
+      copy: request => $.ui.copy(request),
+    },
+  }
+}
+
+export function register(on, options = {}) {
+  const controller = createController(options)
+  const { ui, t, draw, load, focus, refresh, tick, open, join, findByName, invalid, actions, run, fetch, play } = controller
+  let timer
+  let booted
+  let attached
+  let resumeQueued = false
+
+  function boot(api) {
+    booted ??= (async () => {
+      await api.registerCommand()
+      await load(api)
+      void refresh(api)
+    })().catch(error => {
+      booted = undefined
+      throw error
+    })
+    return booted
+  }
+
+  function watch(api) {
+    timer ??= api.clock.every(1000, () => { void tick(api).catch(() => {}) })
+  }
+
+  function resume(api) {
+    if (booted || resumeQueued) return
+    resumeQueued = true
+    // The widget can be the first thing rendered when an already-open thread reloads the mod.
+    api.clock.after(1, () => {
+      void boot(api).then(() => {
+        draw(api)
+        watch(api)
+      }).catch(() => {}).finally(() => { resumeQueued = false })
+    })
+  }
+
+  on('session.start', async ($, event, next) => {
+    const started = await next(event)
+    ui.surface = event.surface ?? ui.surface
+    if (event.isInteractive !== false || event.surface === 'desktop') {
+      await boot(capabilities($))
+      watch(capabilities($))
+    }
+    return started
+  })
+
+  on('session.attach', async ($, event, next) => {
+    const result = await next(event)
+    attached = event.surface
+    ui.surface = event.surface
+    if (event.surface === 'desktop') {
+      await $.ui.status(undefined)
+      await boot(capabilities($))
+      watch(capabilities($))
+    }
+    if (event.surface === 'desktop' || event.surface === 'terminal') void focus(capabilities($))
+    return result
+  })
+
+  on('command.run', { command: 'clarcade' }, async ($, event) => {
+    const args = event.args.trim()
+    const match = /^join\s+(.+)$/i.exec(args)
+    if (args && !match) return { text: t().useJoin, isTextDisplayOnly: true }
+    const opened = await open(capabilities($))
+    watch(capabilities($))
+    if (match && attached !== 'vscode' && attached !== 'mobile') {
+      const api = capabilities($)
+      const target = match[1].trim()
+      if (parseLink(target)) await join(api, target)
+      else await findByName(api, target, true)
+    }
+    if (!opened.isPlaced) return { text: t().fallback, isTextDisplayOnly: true }
+    return {}
+  }).catch(() => ({ text: t().unavailable, isTextDisplayOnly: true }))
+
+  on('prompt.submit', async ($, event, next) => {
+    const desktopInput = attached === 'desktop' && ['sdk', 'unclassified'].includes(event.origin?.kind)
+    if (event.command || event.isMeta || event.attachments?.length || !parseLink(event.text) ||
+        (!desktopInput && event.origin?.kind !== 'composer') || attached === 'vscode' || attached === 'mobile') return next(event)
+    try {
+      await open(capabilities($))
+      watch(capabilities($))
+      await join(capabilities($), event.text)
+    } catch { invalid(capabilities($), t().unavailable) }
+    return { drop: t().connecting }
+  })
+
+  on('ui.close', { id: 'clarcade' }, async ($, event, next) => {
+    const result = await next(event)
+    ui.visible = false
+    return result
+  }).catch(() => undefined)
+
+  on('ui.render', { component: 'Pane', requestId: 'clarcade' }, ($, event) => {
+    ui.surface ??= event.surface
+    if (event.surface === 'terminal' || event.surface === 'desktop') {
+      ui.visible = true
+      resume(capabilities($))
+    }
+    return lobby($.ui.resolve(event), event, ui, actions(capabilities($)), t())
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, ($, event, next) => {
+    ui.surface ??= event.surface
+    if (event.surface === 'terminal' || event.surface === 'desktop') resume(capabilities($))
+    if (!ui.room || ui.settings.notifications === 'off' || event.props.hasSurvey) return next(event)
+    const { Box, Text, Button } = $.ui.resolve(event)
+    const dictionary = t()
+    const title = Text({ children: [
+      `${dictionary.title} · ${ui.room.roomName} · `,
+      Text({ children: '●', color: statusColor(ui.room) }),
+      ` ${roomStatus(ui.room, dictionary)}`,
+    ] })
+    if (!Button) return title
+    return Box({ flexDirection: 'row', children: [
+      title, Button({ key: 'clarcade-open', label: t().open, onPress: () => open(capabilities($)) }),
+    ] })
+  })
+
+  on('ui.message', { component: 'Pane', requestId: 'clarcade', element: 'board' }, async ($, event, next) => {
+    const data = event.data
+    const room = ui.room
+    if (!data || !room || data.gameId !== room.gameId || !['view', 'move'].includes(data.kind) ||
+        ![data.x, data.y, data.left, data.top].every(Number.isInteger)) return next(event)
+    ui.view = { gameId: data.gameId, x: data.x, y: data.y, left: data.left, top: data.top,
+      boardVersion: data.boardVersion, moveEpoch: data.moveEpoch }
+    if (data.kind === 'view') {
+      void focus(capabilities($))
+      return {}
+    }
+    if (room.status === 'playing' && room.connection === 'connected' && room.turn === room.mark &&
+        !room.pendingMove && Math.abs(data.x) <= 100 && Math.abs(data.y) <= 100) {
+      await run(capabilities($), async () => {
+        const { gameId, boardVersion, moveEpoch = 0 } = room
+        if (data.boardVersion !== boardVersion || data.moveEpoch !== moveEpoch) return
+        await fetch(capabilities($), '/move', { gameId, moveNo: boardVersion + 1, moveEpoch, x: data.x, y: data.y })
+        play(capabilities($), 'move')
+        await refresh(capabilities($), true)
+      })
+    }
+    return {}
+  })
+}
