@@ -14,19 +14,22 @@ export async function readSettings($, options) {
   }
   const locale = await $.env.get('LC_ALL') || await $.env.get('LC_MESSAGES') || await $.env.get('LANG')
     || Intl.DateTimeFormat().resolvedOptions().locale
-  const language = value('language', 'auto')
+  // The manifest lists no `options` (older Claude Code rejects the key), so a
+  // typed value outside the known choices falls back to the default here.
+  const choice = (key, fallback, allowed) => allowed.includes(value(key, fallback)) ? value(key, fallback) : fallback
+  const language = choice('language', 'auto', ['auto', 'en', 'vi'])
   const nickname = value('playerName', '')
   return {
     preference: language,
     language: languageOf(language, locale),
     locale,
     sounds: value('sounds', true),
-    notifications: value('notifications', 'band'),
+    notifications: choice('notifications', 'band', ['band', 'toast', 'sound', 'off']),
     playerName: validName(nickname) ? nickname.trim() : '',
     udpPort: value('udpPort', 47979),
     nodePath: value('nodePath', ''),
-    board: value('board', 'grid') === 'dots' ? 'dots' : 'grid',
-    pieces: ['oo', 'pixel'].includes(value('pieces', 'xo')) ? value('pieces', 'xo') : 'xo',
+    board: choice('board', 'grid', ['grid', 'dots']),
+    pieces: choice('pieces', 'xo', ['xo', 'oo', 'pixel']),
     allowTailscale: value('allowTailscale', false),
     allowIpv6Ula: value('allowIpv6Ula', false),
   }

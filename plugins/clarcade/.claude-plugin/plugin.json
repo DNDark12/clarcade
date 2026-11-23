@@ -1,7 +1,7 @@
 {
   "name": "clarcade",
   "displayName": "Clarcade",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Caro (Gomoku) for two players on your LAN while Claude Code works.",
   "author": {
     "name": "DNDark",
@@ -25,13 +25,8 @@
     "language": {
       "type": "string",
       "title": "Language",
-      "options": [
-        "auto",
-        "en",
-        "vi"
-      ],
       "default": "auto",
-      "description": "Follow the system locale or choose English or Vietnamese."
+      "description": "auto, en or vi. auto follows the system locale."
     },
     "sounds": {
       "type": "boolean",
@@ -42,14 +37,8 @@
     "notifications": {
       "type": "string",
       "title": "Turn notifications",
-      "options": [
-        "toast",
-        "sound",
-        "band",
-        "off"
-      ],
       "default": "band",
-      "description": "Choose how Clarcade announces your turn."
+      "description": "band, toast, sound or off: how Clarcade announces your turn."
     },
     "nickname": {
       "type": "string",
@@ -84,23 +73,14 @@
     "board": {
       "type": "string",
       "title": "Board style",
-      "options": [
-        "grid",
-        "dots"
-      ],
       "default": "grid",
-      "description": "Draw the board as a square grid or dots."
+      "description": "grid or dots: draw the board as a square grid or as dots."
     },
     "pieces": {
       "type": "string",
       "title": "Piece style",
-      "options": [
-        "xo",
-        "oo",
-        "pixel"
-      ],
       "default": "xo",
-      "description": "Draw pieces as X/O, circles, or squares."
+      "description": "xo, oo or pixel: draw pieces as X/O, circles or squares."
     }
   }
 }

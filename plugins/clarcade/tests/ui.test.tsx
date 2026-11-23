@@ -550,3 +550,20 @@ test('Desktop widget restores an existing room after reload without opening a bo
   expect(f.toasts).toHaveLength(0)
   await widget.unmount()
 })
+
+// The manifest lists no `options` for these fields (older Claude Code rejects
+// the key), so a value typed outside the known choices falls back to the default.
+test('unknown userConfig choices fall back to the defaults', {
+  options: { pieces: 'banana', board: 'hex', language: 'xx', notifications: 'loud' },
+}, async ($, on) => {
+  fixture(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const ui = await $.ui.mount(pane('terminal', 80))
+  await ui.input({ key: 'player-name', text: 'An' })
+  await ui.press({ key: 'tab-settings' })
+  await ui.press({ key: 'toggle-advanced' })
+  expect((await ui.find({ type: 'Select', key: 'pieces' }))?.props.value).toBe('xo')
+  expect((await ui.find({ type: 'Select', key: 'board' }))?.props.value).toBe('grid')
+  await ui.unmount()
+})
