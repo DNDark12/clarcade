@@ -134,6 +134,26 @@ test('restores a legacy game with outside moves and starts the rematch on a 15x1
   assert.equal(stats.summary().total.draws, 1)
 })
 
+test('the snapshot scores the games played in this room with the current guest', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'clarcade-score-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const host = { playerId: '00000000-0000-4000-8000-000000000001', name: 'An' }
+  const guest = { playerId: '00000000-0000-4000-8000-000000000002', name: 'Binh' }
+  writeFileSync(join(directory, 'room.json'), JSON.stringify({
+    role: 'host', roomCode: 'K7M2QX', roomName: 'Score', host, guest, gameId: '00000000-0000-4000-8000-000000000003',
+    firstPlayerId: host.playerId, startedAt: Date.now(), moves: [], results: [], pendingResults: [],
+    rematchVotes: [], finished: null,
+  }))
+  const room = new Room({ directory }, host.playerId, openStats(join(directory, 'stats.json')), () => {})
+  assert.deepEqual(room.snapshot().score, { host: 0, guest: 0, draws: 0 })
+  for (const winner of [host.playerId, null, guest.playerId, guest.playerId]) {
+    room.endGame(winner, winner ? 'resign' : 'draw-agreed')
+    room.voteRematch(host.playerId)
+    room.voteRematch(guest.playerId)
+  }
+  assert.deepEqual(room.snapshot().score, { host: 1, guest: 2, draws: 1 })
+})
+
 test('a 15x15 snapshot rejects more than 225 moves or a move past an edge', () => {
   const gameId = '00000000-0000-4000-8000-000000000003'
   const meta = { boardSize: 15 }

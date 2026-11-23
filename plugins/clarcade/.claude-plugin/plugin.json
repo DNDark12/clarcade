@@ -1,7 +1,7 @@
 {
   "name": "clarcade",
   "displayName": "Clarcade",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Caro (Gomoku) for two players on your LAN while Claude Code works.",
   "author": {
     "name": "DNDark",

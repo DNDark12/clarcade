@@ -37,7 +37,7 @@ function createController(options) {
     room: null, rooms: null, roomsAt: null, scanning: false, scanRequested: false, roomSearchError: '', busy: false, notice: '', error: '',
     ...HOST_DEFAULTS, joinPin: '', pinLink: null, discoveryName: '', selectedOpponent: null,
     copyFallback: '', inviteAddress: '', confirm: null, view: null, advanced: false, network: false, firewallHelp: false,
-    stats: null, headToHead: null, now: 0, surface: null, visible: false, helperDown: false, nodeMissing: false,
+    stats: null, now: 0, surface: null, visible: false, helperDown: false, nodeMissing: false,
   }
   let setup
   let client
@@ -84,7 +84,7 @@ function createController(options) {
 
   function status(api) {
     api.ui.status(ui.surface !== 'desktop' && ui.room && ui.settings.notifications !== 'off' ?
-      `${t().title} · ${scoreLine(ui.room, ui.headToHead, t())}` : undefined)
+      `${t().title} · ${scoreLine(ui.room, t())}` : undefined)
   }
 
   function refresh(api, afterWrite = false) {
@@ -121,7 +121,6 @@ function createController(options) {
         const previousOpponent = previous?.role === 'host' ? previous.guest : previous?.host
         const opponent = latest?.role === 'host' ? latest.guest : latest?.host
         const opponentChanged = previousOpponent?.playerId !== opponent?.playerId
-        if (opponentChanged) ui.headToHead = null
         status(api)
         draw(api)
         // The board must follow the room snapshot even while the stats request is pending.
@@ -185,8 +184,6 @@ function createController(options) {
         do {
           statsPending = false
           try { ui.stats = await fetch(api, '/stats') } catch { ui.stats = null }
-          const opponent = ui.room?.role === 'host' ? ui.room.guest : ui.room?.host
-          ui.headToHead = ui.stats?.opponents?.find(player => player.playerId === opponent?.playerId) ?? null
           status(api)
           draw(api)
         } while (statsPending)

@@ -13,12 +13,12 @@ export function roomStatus(room, t) {
   return room.turn === room.mark ? t.yours : t.theirs
 }
 
-export function scoreLine(room, result, t) {
+// The score of the games played in this room with the current guest. The
+// all-time record against an opponent is on the statistics tab.
+export function scoreLine(room, t) {
   if (!room.guest) return roomStatus(room, t)
-  const isHost = room.role === 'host'
-  const own = result?.wins ?? 0
-  const other = result?.losses ?? 0
-  return `${room.host.name} ${isHost ? own : other}–${isHost ? other : own} ${room.guest.name} · ${roomStatus(room, t)}`
+  const { host = 0, guest = 0 } = room.score ?? {}
+  return `${room.host.name} ${host}–${guest} ${room.guest.name} · ${roomStatus(room, t)}`
 }
 
 export function lobby(elements, event, ui, actions, t) {
@@ -147,8 +147,8 @@ export function lobby(elements, event, ui, actions, t) {
   function playerBar() {
     const host = room.role === 'host'
     const glyphs = pieceGlyphs(ui.settings.pieces, desktop)
-    const { wins = 0, losses = 0 } = ui.headToHead ?? {}
-    const score = text(` ${host ? wins : losses}–${host ? losses : wins} `, { bold: true, tabular: true })
+    const { host: hostWins = 0, guest: guestWins = 0 } = room.score ?? {}
+    const score = text(` ${hostWins}–${guestWins} `, { bold: true, tabular: true })
     const player = (mark, person, own) => {
       const active = room.status === 'playing' && room.turn === mark
       const color = piecePalette(desktop)[mark]

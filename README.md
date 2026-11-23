@@ -68,7 +68,7 @@ Start a new Code session after updating. Run `claude plugin list` in a terminal 
 
 | | |
 |---|---|
-| What it can do | **Join** a room and play. Someone using Clarcade in Claude Code creates the room |
+| What it can do | **Join** a room and play: request an undo or a draw, answer the host's requests, resign, play again. The board shows the score of the games played in the room so far, and the turn clock and move limit when the room uses them. Someone using Clarcade in Claude Code creates the room |
 | What it cannot do | Create rooms, statistics, settings, turn notifications |
 | Language | English, or Vietnamese when Claude Desktop is set to Vietnamese |
 | App | Claude Desktop on macOS. Not the web or mobile app |

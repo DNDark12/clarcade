@@ -656,3 +656,21 @@ test('the first move can be played off center', async ($, on) => {
   ])
   await ui.unmount()
 })
+
+// The board shows this room's score; the all-time record stays on the statistics tab.
+test('the player bar shows the score of this room, not the all-time record', async ($, on) => {
+  const f = fixture(on, { opponents: [{ playerId: 'guest', name: 'Binh', played: 9, wins: 5, losses: 4, draws: 0 }] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const ui = await $.ui.mount(pane('terminal', 80))
+  await ui.input({ key: 'player-name', text: 'An' })
+  const joined = { ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' } }
+  f.change({ ...joined, score: { host: 0, guest: 0, draws: 0 } })
+  await f.clock.advance(3000)
+  expect(await ui.find({ type: 'Text', text: ' 0–0 ' })).toBeTruthy()
+  f.change({ ...joined, gameId: 'game-2', score: { host: 1, guest: 2, draws: 1 } })
+  await f.clock.advance(3000)
+  expect(await ui.find({ type: 'Text', text: ' 1–2 ' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: ' 5–4 ' })).toBeFalsy()
+  await ui.unmount()
+})

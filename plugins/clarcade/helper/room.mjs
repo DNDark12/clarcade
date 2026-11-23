@@ -97,6 +97,7 @@ export class Room {
       disconnectedAt: room.disconnectedAt, pendingMove: this.pendingMove?.move ?? null,
       port: room.port, address: room.address, turnEndsAt: room.turnEndsAt,
       turnRemainingMs: room.turnRemainingMs, offer: room.offer, emote: this.emote ?? null,
+      score: sessionScore(room),
       directLinks: (room.addresses ?? [room.address]).filter(Boolean)
         .map(address => ({ address, link: roomLinks(room.roomCode, address, room.port).directLink })),
       ...roomLinks(room.roomCode, room.address, room.port),
@@ -958,6 +959,17 @@ function validSavedRoom(room) {
 
 function validPlayer(player) {
   return record(player) && validId(player.playerId) && name(player.name)
+}
+
+// Games finished in this room with the current guest; it starts again with a new guest.
+function sessionScore({ host, guest, results }) {
+  const score = { host: 0, guest: 0, draws: 0 }
+  for (const { winner } of results) {
+    if (winner === null) score.draws++
+    else if (winner === host.playerId) score.host++
+    else if (winner === guest?.playerId) score.guest++
+  }
+  return score
 }
 
 function validResult(result, hostId, guestId) {

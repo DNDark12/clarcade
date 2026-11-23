@@ -29,7 +29,8 @@
   .cell:not(:disabled) { cursor: pointer; }
   .cell:not(:disabled):hover, .cell:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
   .cell:disabled { opacity: 1; }
-  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  #offer-note { margin: 8px 0 0; font-weight: 600; }
   #rematch-note { margin: 8px 0 0; }
   [hidden] { display: none !important; }
 </style>
@@ -46,6 +47,16 @@
   <section id="game" hidden>
     <p id="score"></p>
     <div id="board" data-i18n-label="boardLabel" aria-label="Caro board"></div>
+    <p id="offer-note" hidden></p>
+    <div id="offer-actions" class="actions" hidden>
+      <button id="offer-accept" type="button" class="action" data-i18n="accept">Accept</button>
+      <button id="offer-decline" type="button" class="action" data-i18n="decline">Decline</button>
+    </div>
+    <div id="play-actions" class="actions" hidden>
+      <button id="undo" type="button" class="action" data-i18n="requestUndo">Request undo</button>
+      <button id="draw" type="button" class="action" data-i18n="requestDraw">Offer a draw</button>
+      <button id="resign" type="button" class="action" data-i18n="resign">Resign</button>
+    </div>
     <p id="rematch-note" hidden></p>
     <div class="actions">
       <button id="rematch" type="button" class="action" data-i18n="rematch" hidden>Play again</button>
@@ -58,6 +69,7 @@
 <script>
 const get = id => document.getElementById(id);
 const form = get('join'), board = get('board'), leave = get('leave'), rematch = get('rematch');
+const undo = get('undo'), draw = get('draw'), resign = get('resign');
 const requests = new Map();
 let sequence = 0, ready = false, stopped = false, timer, room, version, renderedGame, busy = false, polling = false;
 let actionRevision = 0;
@@ -67,10 +79,17 @@ const words = {
   en: {
     expand: 'Expand', link: 'LAN invitation link', name: 'Your name', pin: 'Private room PIN', join: 'Join',
     leave: 'Leave', rematch: 'Play again', rematchWaiting: 'Waiting for your opponent to play again…',
-    rematchOffered: 'Your opponent wants to play again.', boardLabel: 'Caro board', connecting: 'Connecting to Claude Desktop…',
+    rematchOffered: 'Your opponent wants to play again.', boardLabel: 'Caro board',
+    requestUndo: 'Request undo', requestDraw: 'Offer a draw', resign: 'Resign', accept: 'Accept', decline: 'Decline',
+    pendingUndo: 'Waiting for an answer to your undo request…', pendingDraw: 'Waiting for an answer to your draw offer…',
+    offeredUndo: 'Your opponent wants to undo their last move.', offeredDraw: 'Your opponent offers a draw.',
+    resignConfirm: 'Resign this game?', secondsLeft: n => `${n}s left`, moveCount: (n, limit) => `move ${n}/${limit}`,
+    reasons: { line: 'five in a row', resign: 'resignation', disconnected: 'disconnect', 'board-full': 'board full',
+      timeout: 'time ran out', 'move-limit': 'move limit reached', 'draw-agreed': 'agreed draw' }, connecting: 'Connecting to Claude Desktop…',
     pasteLink: 'Paste the LAN invitation link from the host.',
     unsupportedSize: 'This preview supports 15 × 15 rooms. Start a new game from Claude Code.',
-    score: (room, host, guest, mark) => `${room} · ${host} / ${guest} · You play ${mark}`,
+    score: (room, host, guest, mark, score) => [room, score ? `${host} ${score.opponent}–${score.you} ${guest}` : `${host} / ${guest}`,
+      score?.draws && (score.draws === 1 ? '1 draw' : `${score.draws} draws`), `You play ${mark}`].filter(Boolean).join(' · '),
     draw: 'Draw', youWon: 'You won', opponentWon: 'Your opponent won', reconnecting: 'Reconnecting…',
     confirming: 'Confirming…', yourTurn: 'Your turn', theirTurn: "Opponent's turn",
     cell: (x, y, mark) => `Cell ${x}, ${y}${mark ? ': ' + mark : ''}`,
@@ -93,15 +112,28 @@ const words = {
       'view-timeout': 'Claude Desktop did not answer the Clarcade board.',
       'rematch-unavailable': 'You can play again once the game is over and both players are connected.',
       'stale-game': 'That game has already changed.',
+      'offer-active': 'There is already a request waiting for an answer.',
+      'undo-last-move': 'You can only ask to undo your own last move.',
+      'invalid-offer': 'That request is no longer open.',
+      'action-unavailable': 'That is only possible during a game while both players are connected.',
+      'invalid-action': 'That action is not available now.',
+      finished: 'The game is already over.',
     },
   },
   vi: {
     expand: 'Mở rộng', link: 'Link mời LAN', name: 'Tên người chơi', pin: 'PIN phòng riêng', join: 'Vào phòng',
     leave: 'Rời phòng', rematch: 'Chơi lại', rematchWaiting: 'Đang chờ đối thủ đồng ý chơi lại…',
-    rematchOffered: 'Đối thủ muốn chơi lại.', boardLabel: 'Bàn Caro', connecting: 'Đang kết nối Claude Desktop…',
+    rematchOffered: 'Đối thủ muốn chơi lại.', boardLabel: 'Bàn Caro',
+    requestUndo: 'Xin đi lại', requestDraw: 'Xin hòa', resign: 'Đầu hàng', accept: 'Đồng ý', decline: 'Từ chối',
+    pendingUndo: 'Đang chờ đối thủ trả lời yêu cầu đi lại…', pendingDraw: 'Đang chờ đối thủ trả lời lời xin hòa…',
+    offeredUndo: 'Đối thủ xin đi lại nước cuối.', offeredDraw: 'Đối thủ xin hòa.',
+    resignConfirm: 'Đầu hàng ván này?', secondsLeft: n => `còn ${n} giây`, moveCount: (n, limit) => `nước ${n}/${limit}`,
+    reasons: { line: 'năm quân liên tiếp', resign: 'đầu hàng', disconnected: 'mất kết nối', 'board-full': 'bàn đã đầy',
+      timeout: 'hết giờ', 'move-limit': 'đạt giới hạn số nước', 'draw-agreed': 'hai bên đồng ý hòa' }, connecting: 'Đang kết nối Claude Desktop…',
     pasteLink: 'Dán link LAN từ người tạo phòng.',
     unsupportedSize: 'Bản thử hỗ trợ phòng 15 × 15. Hãy tạo ván mới ở phía Code.',
-    score: (room, host, guest, mark) => `${room} · ${host} / ${guest} · Bạn cầm ${mark}`,
+    score: (room, host, guest, mark, score) => [room, score ? `${host} ${score.opponent}–${score.you} ${guest}` : `${host} / ${guest}`,
+      score?.draws && `${score.draws} hòa`, `Bạn cầm ${mark}`].filter(Boolean).join(' · '),
     draw: 'Hòa', youWon: 'Bạn thắng', opponentWon: 'Đối thủ thắng', reconnecting: 'Đang kết nối lại…',
     confirming: 'Đang xác nhận…', yourTurn: 'Đến lượt bạn', theirTurn: 'Đến lượt đối thủ',
     cell: (x, y, mark) => `Ô ${x}, ${y}${mark ? ': ' + mark : ''}`,
@@ -124,6 +156,12 @@ const words = {
       'view-timeout': 'Claude Desktop chưa trả lời giao diện Clarcade.',
       'rematch-unavailable': 'Chỉ chơi lại được khi ván đã kết thúc và hai bên đều đang kết nối.',
       'stale-game': 'Ván này đã thay đổi.',
+      'offer-active': 'Đang có một yêu cầu chờ trả lời.',
+      'undo-last-move': 'Bạn chỉ xin đi lại được nước cuối của chính mình.',
+      'invalid-offer': 'Yêu cầu đó đã hết hiệu lực.',
+      'action-unavailable': 'Chỉ làm được khi đang trong ván và hai bên đều kết nối.',
+      'invalid-action': 'Thao tác này hiện không dùng được.',
+      finished: 'Ván đã kết thúc.',
     },
   },
 };
@@ -179,6 +217,7 @@ function render() {
   form.querySelector('button').disabled = !ready || busy;
   leave.disabled = busy;
   rematch.disabled = busy;
+  for (const button of [undo, draw, resign, get('offer-accept'), get('offer-decline')]) button.disabled = busy;
   if (!ready) return;
   if (!room) {
     get('status').textContent = t().pasteLink;
@@ -220,16 +259,31 @@ function render() {
     cell.classList.toggle('win', won.has(key));
     cell.disabled = !canPlay || Boolean(mark);
   }
-  get('score').textContent = t().score(room.roomName, room.hostName, room.guestName, room.mark);
+  // Host first, as on the Claude Code board; the score covers this room's games.
+  get('score').textContent = t().score(room.roomName, room.hostName, room.guestName, room.mark, room.score);
   const text = t();
   const over = Boolean(room.finished)
   rematch.hidden = !over || room.rematchVoted || room.connection !== 'connected';
   get('rematch-note').hidden = !over || !(room.rematchVoted || room.rematchOffered);
   get('rematch-note').textContent = room.rematchVoted ? text.rematchWaiting : room.rematchOffered ? text.rematchOffered : '';
-  get('status').textContent = room.finished ? (room.finished.winner === null ? text.draw : room.won ? text.youWon : text.opponentWon)
-    : room.connection !== 'connected' ? text.reconnecting
+  // During a game: undo and draw requests, answers to the opponent's, and resignation.
+  const live = room.status === 'playing' && room.connection === 'connected';
+  const offer = live ? room.offer : null;
+  get('play-actions').hidden = !live || Boolean(offer);
+  undo.hidden = last?.mark !== room.mark;
+  get('offer-note').hidden = !offer;
+  get('offer-note').textContent = !offer ? '' : offer.mine ? (offer.kind === 'undo' ? text.pendingUndo : text.pendingDraw)
+    : offer.kind === 'undo' ? text.offeredUndo : text.offeredDraw;
+  get('offer-actions').hidden = !offer || offer.mine;
+  const secondsLeft = room.turnMs > 0 && room.turnEndsAt ? Math.max(0, Math.ceil((room.turnEndsAt - Date.now()) / 1000)) : null;
+  const reason = room.reason && text.reasons[room.reason];
+  get('status').textContent = room.finished
+    ? [room.finished.winner === null ? text.draw : room.won ? text.youWon : text.opponentWon, reason].filter(Boolean).join(' · ')
+    : [room.connection !== 'connected' ? text.reconnecting
       : busy || room.pendingMove ? text.confirming
-        : room.turn === room.mark ? text.yourTurn : text.theirTurn;
+        : room.turn === room.mark ? text.yourTurn : text.theirTurn,
+      live && secondsLeft !== null && text.secondsLeft(secondsLeft),
+      room.moveLimit > 0 && text.moveCount(room.boardVersion, room.moveLimit)].filter(Boolean).join(' · ');
 }
 function schedule() {
   clearTimeout(timer);
@@ -242,6 +296,8 @@ async function poll() {
   try {
     const data = await tool('get_state', version ? { version } : {});
     if (!stopped && revision === actionRevision) apply(data);
+    // A running clock counts down between state changes.
+    if (!stopped && room?.turnEndsAt) render();
   } catch (error) { if (!stopped && revision === actionRevision) showError(error); }
   finally { polling = false; schedule(); }
 }
@@ -261,6 +317,16 @@ form.addEventListener('submit', event => {
   const pin = values.get('pin');
   void action('join_room', { link: String(values.get('link')).trim(), name: String(values.get('name')).trim(),
     ...(pin && { pin }) });
+});
+const gameAction = (name, extra = {}) => { if (room) void action('game_action', { gameId: room.gameId, action: name, ...extra }); };
+undo.addEventListener('click', () => gameAction('undoReq'));
+draw.addEventListener('click', () => gameAction('drawReq'));
+resign.addEventListener('click', () => { if (window.confirm(t().resignConfirm)) gameAction('resign'); });
+get('offer-accept').addEventListener('click', () => {
+  if (room?.offer) gameAction(`${room.offer.kind}Resp`, { offerId: room.offer.id, accepted: true });
+});
+get('offer-decline').addEventListener('click', () => {
+  if (room?.offer) gameAction(`${room.offer.kind}Resp`, { offerId: room.offer.id, accepted: false });
 });
 rematch.addEventListener('click', () => {
   if (room?.finished) void action('rematch', { gameId: room.gameId });
@@ -298,7 +364,7 @@ window.addEventListener('message', event => {
 });
 async function start() {
   const result = await request('ui/initialize', {
-    protocolVersion: '2026-01-26', appInfo: { name: 'Clarcade', version: '0.1.4' },
+    protocolVersion: '2026-01-26', appInfo: { name: 'Clarcade', version: '0.1.5' },
     appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
   });
   if (!result?.protocolVersion) throw new Error('daemon-unavailable');

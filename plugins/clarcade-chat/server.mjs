@@ -39,6 +39,9 @@ const tools = [
       ['gameId', 'moveNo', 'moveEpoch', 'x', 'y']), _meta: privateTool },
   { name: 'rematch', description: 'Vote to play again after the game ends. A new game starts when both players vote.',
     inputSchema: object({ gameId: string }, ['gameId']), _meta: privateTool },
+  { name: 'game_action', description: 'During a game: request an undo or a draw, answer the opponent\'s request, or resign.',
+    inputSchema: object({ gameId: string, action: { type: 'string', enum: ['undoReq', 'drawReq', 'undoResp', 'drawResp', 'resign'] },
+      offerId: string, accepted: { type: 'boolean' } }, ['gameId', 'action']), _meta: privateTool },
   { name: 'leave_room', description: 'Leave the current LAN match.',
     inputSchema: object({ gameId: string }, ['gameId']), _meta: privateTool },
 ]
@@ -103,12 +106,18 @@ function guestSnapshot(snapshot) {
   const { version, room } = snapshot
   if (room?.role !== 'guest') return { version, room: null }
   const { gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
-    pendingMove, winLine, finished, host, guest, rematchVotes = [] } = room
+    pendingMove, winLine, finished, host, guest, rematchVotes = [], ruleset, turnMs = 0, turnEndsAt = null,
+    moveLimit = 0, offer = null, score = null } = room
   return { version, room: { gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
     pendingMove: Boolean(pendingMove), winLine, finished,
     hostName: host.name, guestName: guest?.name, won: finished?.winner === guest?.playerId,
     // Who has asked for another game; it starts once both have.
-    rematchVoted: rematchVotes.includes(guest?.playerId), rematchOffered: rematchVotes.includes(host.playerId) } }
+    rematchVoted: rematchVotes.includes(guest?.playerId), rematchOffered: rematchVotes.includes(host.playerId),
+    // The same in-game options as Clarcade in Claude Code.
+    ruleset, turnMs, turnEndsAt, moveLimit, reason: finished?.reason ?? null,
+    offer: offer ? { id: offer.id, kind: offer.kind, mine: offer.playerId === guest?.playerId } : null,
+    // Games won in this room so far; an older daemon sends no score.
+    score: score ? { you: score.guest, opponent: score.host, draws: score.draws } : null } }
 }
 
 async function state(version) {
@@ -162,6 +171,18 @@ async function call(name, input) {
       const response = await daemon('/action', { gameId: room.gameId, action: 'rematch' })
       return response.status === 200 ? result({ ok: true, ...await state() }) : failure(response.data?.reason ?? 'rematch-failed')
     }
+    case 'game_action': {
+      const { room } = await state()
+      const { action, offerId, accepted } = input
+      if (!room || room.gameId !== input.gameId) return failure('stale-game')
+      if (!['undoReq', 'drawReq', 'undoResp', 'drawResp', 'resign'].includes(action)) return failure('invalid-action')
+      if (room.status !== 'playing' || room.connection !== 'connected') return failure('action-unavailable')
+      const answer = action.endsWith('Resp')
+      if (answer && (typeof offerId !== 'string' || typeof accepted !== 'boolean')) return failure('invalid-offer')
+      const response = await daemon('/action', { gameId: room.gameId, action, moveEpoch: room.moveEpoch,
+        boardVersion: room.boardVersion, ...(answer && { offerId, accepted }) })
+      return response.status === 200 ? result({ ok: true, ...await state() }) : failure(response.data?.reason ?? 'action-failed')
+    }
     case 'leave_room': {
       const { room } = await state()
       if (!room || room.gameId !== input.gameId) return failure('stale-game')
@@ -183,7 +204,7 @@ async function handle({ id, method, params = {} }) {
   switch (method) {
     case 'initialize':
       payload = { protocolVersion: protocols.includes(params.protocolVersion) ? params.protocolVersion : protocols[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat', version: '0.1.4' } }
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat', version: '0.1.5' } }
       break
     case 'ping': payload = {}; break
     case 'tools/list': payload = { tools }; break
