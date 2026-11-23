@@ -24,7 +24,7 @@ const pane = (surface: 'terminal' | 'desktop' | 'mobile' | 'vscode', columns = 4
   },
 })
 
-function fixture(on, { privateRoom = false, publicRoom = false } = {}) {
+function fixture(on, { privateRoom = false, publicRoom = false, waitForStats = async () => {} } = {}) {
   const store = mock.store(on)
   const clock = mock.clock(on)
   let room = null
@@ -50,7 +50,7 @@ function fixture(on, { privateRoom = false, publicRoom = false } = {}) {
       : e.argv.at(-1) === 'command -v node' ? '/usr/bin/node\n' : '{"socketPath":"/tmp/clarcade-test.sock"}'
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('http.fetch', (_, e) => {
+  on('http.fetch', async (_, e) => {
     const url = new URL(e.url)
     const path = url.pathname
     const body = e.init?.body && JSON.parse(e.init.body)
@@ -80,11 +80,43 @@ function fixture(on, { privateRoom = false, publicRoom = false } = {}) {
           hostName: 'An', ruleset: matchedPrivate ? 'vn' : 'freestyle', status: 'waiting',
           visibility: matchedPrivate ? 'private' : 'public', address: '192.168.0.20', port: 49000, latencyMs: 1 }] : [] }
     }
-    if (path === '/stats') reply = { total: { played: 2, wins: 1, losses: 1, draws: 0 }, opponents: [] }
+    if (path === '/stats') {
+      await waitForStats()
+      reply = { total: { played: 2, wins: 1, losses: 1, draws: 0 }, opponents: [] }
+    }
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(reply) } }
   })
   return { clock, opens, requests, change, toasts, store, registrations }
 }
+
+test('desktop host shows the board and subsequent moves while stats are still loading', async ($, on) => {
+  let pendingStats: Promise<void> | undefined
+  const f = fixture(on, { waitForStats: async () => { await pendingStats } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.input({ key: 'player-name', text: 'An' })
+  await ui.press({ key: 'tab-host' })
+  await ui.input({ key: 'room-name', text: original.roomName })
+  expect(await ui.find({ type: 'Button', text: /Copy link/ })).toBeTruthy()
+
+  let releaseStats = () => {}
+  pendingStats = new Promise<void>(resolve => { releaseStats = resolve })
+  try {
+    const joined = { ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' } }
+    f.change(joined)
+    await f.clock.advance(3000)
+    expect(await ui.find({ type: 'Client', key: 'board' })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /Your turn/ })).toBeTruthy()
+
+    f.change({ ...joined, boardVersion: 1, turn: 'O', moves: [{ x: 0, y: 0, mark: 'X' }] })
+    await f.clock.advance(3000)
+    expect(await ui.find({ type: 'Text', text: /Opponent’s turn/ })).toBeTruthy()
+    expect(f.opens).toHaveLength(1)
+  } finally {
+    releaseStats()
+  }
+})
 
 for (const surface of surfaces) {
   test(`${surface}: onboarding, host, clipboard fallback, move and pane reopen`, async ($, on) => {

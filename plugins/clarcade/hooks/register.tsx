@@ -45,6 +45,8 @@ function createController(options) {
   let version
   let pendingJoin
   let refreshJob
+  let statsJob: Promise<void> | undefined
+  let statsPending = false
   let scanJob: { roomName: string; promise?: Promise<void> } | undefined
   let elapsed = 0
   let discoveryElapsed = 0
@@ -116,12 +118,16 @@ function createController(options) {
           if (!latest) Object.assign(ui, HOST_DEFAULTS)
         }
         if (previous?.gameId !== latest?.gameId) ui.view = null
-        if (previous?.guest?.playerId !== latest?.guest?.playerId || previous?.status !== latest?.status ||
-            latest?.status === 'finished' || ui.tab === 'stats') {
-          await updateStats(api)
-        }
+        const previousOpponent = previous?.role === 'host' ? previous.guest : previous?.host
+        const opponent = latest?.role === 'host' ? latest.guest : latest?.host
+        const opponentChanged = previousOpponent?.playerId !== opponent?.playerId
+        if (opponentChanged) ui.headToHead = null
         status(api)
         draw(api)
+        // The board must follow the room snapshot even while the stats request is pending.
+        if (opponentChanged || previous?.status !== latest?.status || latest?.status === 'finished' || ui.tab === 'stats') {
+          void updateStats(api).catch(() => {})
+        }
         for (const event of snapshot.notifications ?? []) {
           if (event.id === lastAlert || (!ART[event.event] && event.event !== 'action-rejected')) continue
           const sequence = event.id.split(':')
@@ -172,10 +178,23 @@ function createController(options) {
     if (ui.settings.sounds) void api.audio.play({ asset: `sounds/${clip}.wav` }).catch(() => {})
   }
 
-  async function updateStats(api) {
-    try { ui.stats = await fetch(api, '/stats') } catch { ui.stats = null }
-    const opponent = ui.room?.role === 'host' ? ui.room.guest : ui.room?.host
-    ui.headToHead = ui.stats?.opponents?.find(player => player.playerId === opponent?.playerId) ?? null
+  function updateStats(api) {
+    statsPending = true
+    statsJob ??= (async () => {
+      try {
+        do {
+          statsPending = false
+          try { ui.stats = await fetch(api, '/stats') } catch { ui.stats = null }
+          const opponent = ui.room?.role === 'host' ? ui.room.guest : ui.room?.host
+          ui.headToHead = ui.stats?.opponents?.find(player => player.playerId === opponent?.playerId) ?? null
+          status(api)
+          draw(api)
+        } while (statsPending)
+      } finally {
+        statsJob = undefined
+      }
+    })()
+    return statsJob
   }
 
   function discover(api, joinIfUnique = false) {
@@ -366,11 +385,7 @@ function createController(options) {
           await refresh(api, true)
         })
       },
-      async stats() {
-        await updateStats(api)
-        status(api)
-        draw(api)
-      },
+      stats() { return updateStats(api) },
       update() {
         return run(api, async () => {
           ui.notice = updateText(await updatePlugin(api), t())

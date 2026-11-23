@@ -49,7 +49,7 @@ After installation, start a new Claude Code session and run `/clarcade`. The fir
 
 Clarcade updates itself. About a minute after a session starts, at most once a day, it refreshes its marketplace and installs a newer version with the Claude Code CLI, the same two commands as below. It skips the check while a game is being played and when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. When a new version is installed, a toast asks you to restart Claude Code to load it.
 
-Turn this off in **Settings → Update automatically**, or update at once with **Update now** or `/clarcade update`. From a terminal:
+Turn this off in **Settings → Update automatically**, or update at once with **Update now** or `/clarcade update`. If your installed version does not offer these options, run both commands in a terminal:
 
 ```sh
 claude plugin marketplace update clarcade
@@ -59,6 +59,8 @@ claude plugin marketplace update clarcade
 claude plugin update clarcade@clarcade
 ```
 
+Start a new Code session after updating. Run `claude plugin list` in a terminal to check which version is installed.
+
 ## How to play
 
 ### Create a room
@@ -66,6 +68,8 @@ claude plugin update clarcade@clarcade
 1. Run `/clarcade` → **Create room**.
 2. Choose the rules and visibility, enter a room name and press **Create room**. Open **Room options** to change the turn clock or reconnect window.
 3. For a public room, the other player can select it from **Join room**. To send an invitation, press **Copy link**. For a private room, share the PIN separately.
+
+When the guest joins, an open host pane switches from the waiting screen to the board. The host places the first stone in the center. If you closed the pane, run `/clarcade` again to see the current board.
 
 If the other player cannot find the room, open **Connection help**, select your LAN address and press **Copy link**. The resulting link connects straight to your machine.
 
@@ -159,6 +163,7 @@ Then uninstall the plugin with `/plugin uninstall clarcade@clarcade`.
 | Problem | What to do |
 |---|---|
 | The room does not show up | Check that both machines are on the same network and use the same discovery port. Open **Connection help**, select your LAN address and press **Copy link** if discovery fails |
+| The host still sees the waiting screen after the guest joins | Update the host to 0.1.6 or later. The board refreshes while statistics load |
 | Node cannot be found | Enter the absolute Node path in Settings → Advanced → Network, then press **Reconnect** |
 | Lost connection to the background process | Press **Reconnect**. If it keeps failing, check `daemon.log` |
 | The board is larger than the pane | Scroll with the arrow keys; `C` jumps to the last move |
