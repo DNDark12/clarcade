@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clarcade</title>
+<style>
+  :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+  body { margin: 0; color: var(--color-text-primary, CanvasText); }
+  main { margin: auto; max-width: 420px; padding: 12px 16px 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  h1 { font-size: 19px; margin: 0; }
+  form { display: grid; gap: 10px; margin-top: 14px; }
+  label { display: grid; gap: 4px; }
+  button, input { font: inherit; }
+  input, .action { border: 1px solid var(--color-border-primary, GrayText); padding: 6px 8px; border-radius: 5px; }
+  .action { cursor: pointer; }
+  .action:disabled { cursor: default; }
+  #score { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  #status { min-height: 1.35em; margin: 8px 0; }
+  #error { color: var(--color-text-danger, #c94532); margin: 8px 0 0; }
+  #board { display: grid; grid-template-columns: repeat(15, minmax(0, 1fr)); gap: 2px; }
+  .cell { min-width: 0; aspect-ratio: 1; padding: 0; border: 1px solid transparent; border-radius: 2px;
+    color: inherit; background: color-mix(in srgb, CanvasText 12%, Canvas); line-height: 1; font-weight: 700; }
+  .cell[data-mark="X"] { color: light-dark(#943818, #f58a5b); }
+  .cell[data-mark="O"] { color: light-dark(#2458a4, #9cc4ff); }
+  .cell.latest { background: color-mix(in srgb, CanvasText 26%, Canvas); }
+  .cell.win { border-color: light-dark(#307e51, #85dba3); }
+  .cell:not(:disabled) { cursor: pointer; }
+  .cell:not(:disabled):hover, .cell:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+  .cell:disabled { opacity: 1; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Clarcade</h1><button id="expand" type="button" class="action" hidden>Mở rộng</button></header>
+  <form id="join">
+    <label>Link mời LAN <input name="link" placeholder="clarcade://j/…" required maxlength="256" autocomplete="off"></label>
+    <label>Tên người chơi <input name="name" required maxlength="48" autocomplete="nickname"></label>
+    <label>PIN phòng riêng <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="off"></label>
+    <button class="action" type="submit" disabled>Vào phòng</button>
+  </form>
+  <section id="game" hidden>
+    <p id="score"></p>
+    <div id="board" aria-label="Bàn Caro"></div>
+    <button id="leave" type="button" class="action">Rời phòng</button>
+  </section>
+  <p id="status" role="status">Đang kết nối Claude Desktop…</p>
+  <p id="error" role="alert" hidden></p>
+</main>
+<script>
+const get = id => document.getElementById(id);
+const form = get('join'), board = get('board'), leave = get('leave');
+const requests = new Map();
+let sequence = 0, ready = false, stopped = false, timer, room, version, renderedGame, busy = false, polling = false;
+let actionRevision = 0;
+const messages = {
+  'invalid-link': 'Link mời LAN không hợp lệ.',
+  'invalid-name': 'Tên người chơi không hợp lệ.',
+  'pin-required': 'Phòng yêu cầu mã PIN.',
+  'wrong-pin': 'Mã PIN không đúng.',
+  'invalid-pin': 'Mã PIN phải có 4 đến 6 chữ số.',
+  'room-not-found': 'Không tìm thấy phòng. Thử link có địa chỉ LAN.',
+  'room-full': 'Phòng đã đủ người.',
+  'room-active': 'Bạn đã ở trong một phòng.',
+  'connect-timeout': 'Không kết nối được máy host.',
+  'stale-move': 'Bàn đã thay đổi. Hãy thử lại sau khi cập nhật.',
+  'move-unavailable': 'Chưa thể đánh nước này.',
+  'daemon-unavailable': 'Không kết nối được tiến trình Clarcade trên máy.',
+  'node-required': 'Cần cài Node.js 22 trở lên trên máy để kết nối phòng LAN.',
+  'view-timeout': 'Claude Desktop chưa trả lời giao diện Clarcade.',
+};
+function send(message) { window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*'); }
+function request(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = ++sequence;
+    const timeout = setTimeout(() => { requests.delete(id); reject(new Error('view-timeout')); }, 15000);
+    requests.set(id, { resolve, reject, timeout });
+    send({ id, method, params });
+  });
+}
+function showError(error) {
+  get('error').textContent = error ? (messages[error.message] ?? ('Clarcade báo lỗi: ' + error.message)) : '';
+  get('error').hidden = !error;
+}
+async function tool(name, args = {}) {
+  const result = await request('tools/call', { name, arguments: args });
+  let data = result.structuredContent;
+  if (!data) {
+    try { data = JSON.parse(result.content?.[0]?.text); } catch {}
+  }
+  if (result.isError || !data) throw new Error(data?.reason ?? 'daemon-unavailable');
+  return data;
+}
+function apply(data) {
+  if (data.unchanged) return;
+  room = data.room;
+  version = data.version;
+  render();
+}
+function render() {
+  form.hidden = Boolean(room);
+  get('game').hidden = !room;
+  form.querySelector('button').disabled = !ready || busy;
+  leave.disabled = busy;
+  if (!ready) return;
+  if (!room) {
+    get('status').textContent = 'Dán link LAN từ người tạo phòng.';
+    return;
+  }
+  const size = room.boardSize;
+  if (size !== 15) {
+    board.replaceChildren();
+    renderedGame = undefined;
+    get('status').textContent = 'Bản thử hỗ trợ phòng 15 × 15. Hãy tạo ván mới ở phía Code.';
+    return;
+  }
+  const edge = (size - 1) / 2;
+  if (renderedGame !== room.gameId) {
+    renderedGame = room.gameId;
+    board.replaceChildren(...Array.from({ length: size * size }, (_, index) => {
+      const cell = document.createElement('button');
+      cell.type = 'button'; cell.className = 'cell';
+      const x = index % size - edge, y = Math.floor(index / size) - edge;
+      cell.addEventListener('click', () => {
+        if (room && !busy) void action('play_move', { gameId: room.gameId, moveNo: room.boardVersion + 1,
+          moveEpoch: room.moveEpoch, x, y });
+      });
+      return cell;
+    }));
+  }
+  const cells = new Map(room.moves.map(({ x, y, mark }) => [`${x},${y}`, mark]));
+  const won = new Set(room.winLine?.map(({ x, y }) => `${x},${y}`));
+  const last = room.moves.at(-1);
+  const canPlay = !busy && room.status === 'playing' && room.connection === 'connected'
+    && !room.pendingMove && room.turn === room.mark;
+  for (let index = 0; index < board.children.length; index++) {
+    const cell = board.children[index], x = index % size - edge, y = Math.floor(index / size) - edge;
+    const key = `${x},${y}`, mark = cells.get(key) ?? '';
+    cell.dataset.mark = mark;
+    if (cell.textContent !== mark) cell.textContent = mark;
+    cell.setAttribute('aria-label', `Ô ${x}, ${y}${mark ? ': ' + mark : ''}`);
+    cell.classList.toggle('latest', last?.x === x && last.y === y);
+    cell.classList.toggle('win', won.has(key));
+    cell.disabled = !canPlay || Boolean(mark) || (!room.moves.length && (x !== 0 || y !== 0));
+  }
+  get('score').textContent = `${room.roomName} · ${room.hostName} / ${room.guestName} · Bạn cầm ${room.mark}`;
+  get('status').textContent = room.finished ? (room.finished.winner === null ? 'Hòa' : room.won ? 'Bạn thắng' : 'Đối thủ thắng')
+    : room.connection !== 'connected' ? 'Đang kết nối lại…'
+      : busy || room.pendingMove ? 'Đang xác nhận…'
+        : room.turn === room.mark ? 'Đến lượt bạn' : 'Đến lượt đối thủ';
+}
+function schedule() {
+  clearTimeout(timer);
+  if (!stopped && room) timer = setTimeout(() => void poll(), 1000);
+}
+async function poll() {
+  if (stopped || busy || polling) { schedule(); return; }
+  polling = true;
+  const revision = actionRevision;
+  try {
+    const data = await tool('get_state', version ? { version } : {});
+    if (!stopped && revision === actionRevision) apply(data);
+  } catch (error) { if (!stopped && revision === actionRevision) showError(error); }
+  finally { polling = false; schedule(); }
+}
+async function action(name, args) {
+  if (!ready || busy || stopped) return;
+  actionRevision++;
+  busy = true;
+  showError(null);
+  render();
+  try { apply(await tool(name, args)); }
+  catch (error) { showError(error); }
+  finally { busy = false; render(); schedule(); }
+}
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  const values = new FormData(form);
+  const pin = values.get('pin');
+  void action('join_room', { link: String(values.get('link')).trim(), name: String(values.get('name')).trim(),
+    ...(pin && { pin }) });
+});
+leave.addEventListener('click', () => {
+  if (!room) return;
+  if (room.status === 'playing' && !window.confirm('Rời phòng đang chơi có thể bị tính thua. Rời phòng?')) return;
+  void action('leave_room', { gameId: room.gameId });
+});
+function setHost(context) {
+  const theme = context?.theme;
+  if (theme === 'dark' || theme === 'light') document.documentElement.style.colorScheme = theme;
+  get('expand').hidden = !context?.availableDisplayModes?.includes('fullscreen') || context.displayMode === 'fullscreen';
+}
+get('expand').addEventListener('click', () => {
+  void request('ui/request-display-mode', { mode: 'fullscreen' }).catch(showError);
+});
+window.addEventListener('message', event => {
+  if (event.source !== window.parent) return;
+  const message = event.data;
+  if (message?.jsonrpc !== '2.0') return;
+  if (message.method === 'ping') send({ id: message.id, result: {} });
+  if (message.method === 'ui/notifications/host-context-changed') setHost(message.params);
+  if (message.method === 'ui/resource-teardown') {
+    stopped = true; clearTimeout(timer);
+    send({ id: message.id, result: {} });
+  }
+  if (message.method || !requests.has(message.id)) return;
+  const pending = requests.get(message.id);
+  requests.delete(message.id);
+  clearTimeout(pending.timeout);
+  if (message.error) pending.reject(new Error(message.error.message));
+  else pending.resolve(message.result);
+});
+async function start() {
+  const result = await request('ui/initialize', {
+    protocolVersion: '2026-01-26', appInfo: { name: 'Clarcade', version: '0.1.1' },
+    appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
+  });
+  if (!result?.protocolVersion) throw new Error('daemon-unavailable');
+  send({ method: 'ui/notifications/initialized' });
+  setHost(result.hostContext);
+  ready = true;
+  render();
+  new ResizeObserver(() => send({ method: 'ui/notifications/size-changed', params: {
+    height: Math.ceil(document.querySelector('main').getBoundingClientRect().height),
+  } })).observe(document.querySelector('main'));
+  await poll();
+}
+void start().catch(showError);
+</script>
+</body>
+</html>

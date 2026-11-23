@@ -1,0 +1,21 @@
+{
+  "manifest_version": "0.3",
+  "name": "clarcade-chat-preview",
+  "display_name": "Clarcade Chat Preview",
+  "version": "0.1.1",
+  "description": "Join a Clarcade LAN room and play Caro inside Claude Desktop Chat.",
+  "author": { "name": "DNDark" },
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "server/server.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/server.mjs"]
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": { "node": ">=22.0.0" }
+  }
+}

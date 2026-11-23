@@ -1,6 +1,6 @@
 # Clarcade
 
-Two-player Caro (Gomoku) on your LAN, inside Claude Code, while your agents work. No internet, no external server and no npm dependencies. Each game runs in a background process on your machine, so it survives closing the pane, switching threads and reloading the mod.
+Two-player Caro (Gomoku) on your LAN, inside Claude Code, while your agents work. Without Claude Code (for example on the Free plan), you can still join a game from the Chat tab of Claude Desktop with the [Chat extension](#play-from-claude-desktop-chat-without-claude-code). No internet, no external server and no npm dependencies. Each game runs in a background process on your machine, so it survives closing the pane, switching threads and reloading the mod.
 
 ## Features
 
@@ -17,6 +17,7 @@ Two-player Caro (Gomoku) on your LAN, inside Claude Code, while your agents work
 | Component | Requirement |
 |---|---|
 | Claude Code | 2.1.319 or later. Playable in the terminal and in Claude Desktop. VS Code and mobile only show the room status |
+| Without Claude Code | Claude Desktop with the Chat extension, to join games only. See [Play from Claude Desktop Chat](#play-from-claude-desktop-chat-without-claude-code) |
 | Operating system | macOS (tested). Linux is untested. Windows is not supported |
 | Node.js | 22 or later |
 | Perl | `/usr/bin/perl` with `flock` support. The launcher uses it to keep a single background process running |
@@ -60,6 +61,45 @@ claude plugin update clarcade@clarcade
 ```
 
 Start a new Code session after updating. Run `claude plugin list` in a terminal to check which version is installed.
+
+## Play from Claude Desktop Chat (without Claude Code)
+
+**Clarcade Chat Preview** is a Claude Desktop extension for people without Claude Code, such as Free plan accounts. It shows the board inside a Chat or Cowork conversation and plays on the same LAN as the Claude Code plugin.
+
+| | |
+|---|---|
+| What it can do | **Join** a room and play. Someone using Clarcade in Claude Code creates the room |
+| What it cannot do | Create rooms, statistics, settings, turn notifications |
+| App | Claude Desktop on macOS. Not the web or mobile app |
+| Node.js | 22 or later installed on the machine (`node` on PATH, `/opt/homebrew/bin/node` or `/usr/local/bin/node`) |
+| Network | Same LAN as the host. Allow incoming connections for Node if macOS Firewall asks |
+
+### Install the extension
+
+1. Download `clarcade-chat-preview-<version>.mcpb` from the [latest release](https://github.com/DNDark12/clarcade/releases/latest).
+2. Double-click the file, or drag it onto the Claude Desktop window. You can also open **Settings → Extensions → Advanced settings → Install Extension…** and choose the file.
+3. Press **Install**, then check that **Clarcade Chat Preview** is turned on in **Settings → Extensions**.
+
+### Open the board
+
+1. Start a new chat. In the **+** menu, open **Connectors** and check that **Clarcade Chat Preview** is on.
+2. Send a short message such as `Open Clarcade` (or `Mở Clarcade`). Claude opens the board in its reply. If Claude asks for permission, choose **Always allow** so later games open without the prompt.
+3. Paste the invitation link from the host (`clarcade://j/…`), enter your name and, for a private room, the PIN. Press **Vào phòng** (Join).
+4. Click a cell to place your stone. **Mở rộng** shows the board full screen, **Rời phòng** leaves the room.
+
+### Open it again without typing
+
+Chat only shows the board in a reply from Claude, so there is no menu button that opens it on its own. To avoid typing each time, keep one conversation for Clarcade:
+
+1. After the board opens the first time, rename that chat to `Clarcade` and star it.
+2. Next time, open it from **Starred** in the sidebar. The board in that chat reads the current game from the background process on your machine, so a game in progress continues where it was.
+3. If the board in the old message does not respond, send `Open Clarcade` again in the same chat.
+
+The game itself runs in a background process, not in the chat. Closing the chat or Claude Desktop does not end it while the host keeps the room open.
+
+### Data and uninstalling
+
+The extension keeps its data in `~/.clarcade-chat-preview`, separate from the Claude Code plugin. To remove it, open **Settings → Extensions**, choose **Clarcade Chat Preview** and uninstall it, then delete that folder.
 
 ## How to play
 
