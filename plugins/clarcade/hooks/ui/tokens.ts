@@ -1,8 +1,10 @@
 export const pieceColor = { X: 'claude', O: 'suggestion' } as const
 // `claude` is the same orange in both modes and falls under 3:1 on Desktop's
-// light background. Desktop paints CSS, so X takes a darker orange in light mode
-// and keeps the brand orange in dark mode. The terminal keeps the theme key.
-export const desktopPieceColor = { X: 'light-dark(#a8481f, #d77757)', O: 'suggestion' } as const
+// light tiles. Desktop does not paint CSS `light-dark()` (X fell back to the
+// text color, white in dark mode), and a mod cannot read the mode, so X takes
+// one deeper orange that holds about 3.5:1 on both the light and the dark tile.
+// The terminal keeps the theme key.
+export const desktopPieceColor = { X: '#cc5f2d', O: 'suggestion' } as const
 export const piecePalette = (desktop: boolean) => desktop ? desktopPieceColor : pieceColor
 export const muted = { color: 'inactive' } as const
 export const grid = { color: 'subtle', dimColor: true } as const

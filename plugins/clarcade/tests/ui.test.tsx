@@ -468,8 +468,8 @@ test('Desktop marks only the latest move and keeps the same piece color with or 
   const frame = { type: 'Box' as const, key: 'board-cursor', in: 'board' }
   const latest = { type: 'Box' as const, key: 'board-last-move', in: 'board' }
   const corners = { type: 'Box' as const, key: 'board-cursor-corners', in: 'board' }
-  // X's Desktop color: darker orange in light mode, the brand orange in dark mode.
-  const xColor = 'light-dark(#a8481f, #d77757)'
+  // X's Desktop color: one deeper orange, about 3.5:1 on light and dark tiles.
+  const xColor = '#cc5f2d'
   expect((await ui.find(frame))?.props).toMatchObject({ left: 24, top: 8 })
   expect(Math.round(Number((await ui.find(frame))?.props.width) * 8.8)).toBe(180)
   expect((await ui.find(cursor))?.props.backgroundColor).toBe('text')
