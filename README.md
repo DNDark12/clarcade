@@ -64,28 +64,30 @@ Start a new Code session after updating. Run `claude plugin list` in a terminal 
 
 ## Play from Claude Desktop Chat (without Claude Code)
 
-**Clarcade Chat Preview** is a Claude Desktop extension for people without Claude Code, such as Free plan accounts. It shows the board inside a Chat or Cowork conversation and plays on the same LAN as the Claude Code plugin.
+**Clarcade for Chat** is a Claude Desktop extension (listed as **Clarcade**) for people without Claude Code, such as Free plan accounts. It shows the board inside a Chat or Cowork conversation and plays on the same LAN as the Claude Code plugin.
 
 | | |
 |---|---|
 | What it can do | **Join** a room and play. Someone using Clarcade in Claude Code creates the room |
 | What it cannot do | Create rooms, statistics, settings, turn notifications |
+| Language | English, or Vietnamese when Claude Desktop is set to Vietnamese |
 | App | Claude Desktop on macOS. Not the web or mobile app |
 | Node.js | 22 or later installed on the machine (`node` on PATH, `/opt/homebrew/bin/node` or `/usr/local/bin/node`) |
 | Network | Same LAN as the host. Allow incoming connections for Node if macOS Firewall asks |
 
 ### Install the extension
 
-1. Download `clarcade-chat-preview-<version>.mcpb` from the [latest release](https://github.com/DNDark12/clarcade/releases/latest).
+1. Download `clarcade-chat-<version>.mcpb` from the [latest release](https://github.com/DNDark12/clarcade/releases/latest). If you installed **Clarcade Chat Preview** 0.1.1, uninstall it first in **Settings → Extensions**; your game data is kept.
 2. Double-click the file, or drag it onto the Claude Desktop window. You can also open **Settings → Extensions → Advanced settings → Install Extension…** and choose the file.
-3. Press **Install**, then check that **Clarcade Chat Preview** is turned on in **Settings → Extensions**.
+3. Press **Install**, then check that **Clarcade** is turned on in **Settings → Extensions**.
 
 ### Open the board
 
-1. Start a new chat. In the **+** menu, open **Connectors** and check that **Clarcade Chat Preview** is on.
+1. Start a new chat. In the **+** menu, open **Connectors** and check that **Clarcade** is on.
 2. Send a short message such as `Open Clarcade` (or `Mở Clarcade`). Claude opens the board in its reply. If Claude asks for permission, choose **Always allow** so later games open without the prompt.
-3. Paste the invitation link from the host (`clarcade://j/…`), enter your name and, for a private room, the PIN. Press **Vào phòng** (Join).
-4. Click a cell to place your stone. **Mở rộng** shows the board full screen, **Rời phòng** leaves the room.
+3. Paste the invitation link from the host (`clarcade://j/…`), enter your name and, for a private room, the PIN. Press **Join**.
+4. Click a cell to place your stone. **Expand** shows the board full screen, **Leave** leaves the room.
+5. When the game ends, press **Play again**. The next game starts once the host also agrees, and the first player alternates.
 
 ### Open it again without typing
 
@@ -99,7 +101,7 @@ The game itself runs in a background process, not in the chat. Closing the chat 
 
 ### Data and uninstalling
 
-The extension keeps its data in `~/.clarcade-chat-preview`, separate from the Claude Code plugin. To remove it, open **Settings → Extensions**, choose **Clarcade Chat Preview** and uninstall it, then delete that folder.
+The extension keeps its data in `~/.clarcade-chat-preview`, separate from the Claude Code plugin. To remove it, open **Settings → Extensions**, choose **Clarcade** and uninstall it, then delete that folder.
 
 ## How to play
 

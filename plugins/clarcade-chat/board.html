@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -29,48 +29,121 @@
   .cell:not(:disabled) { cursor: pointer; }
   .cell:not(:disabled):hover, .cell:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
   .cell:disabled { opacity: 1; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  #rematch-note { margin: 8px 0 0; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <header><h1>Clarcade</h1><button id="expand" type="button" class="action" hidden>Mở rộng</button></header>
+  <header><h1>Clarcade</h1><button id="expand" type="button" class="action" data-i18n="expand" hidden>Expand</button></header>
   <form id="join">
-    <label>Link mời LAN <input name="link" placeholder="clarcade://j/…" required maxlength="256" autocomplete="off"></label>
-    <label>Tên người chơi <input name="name" required maxlength="48" autocomplete="nickname"></label>
-    <label>PIN phòng riêng <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="off"></label>
-    <button class="action" type="submit" disabled>Vào phòng</button>
+    <label><span data-i18n="link">LAN invitation link</span> <input name="link" placeholder="clarcade://j/…" required maxlength="256" autocomplete="off"></label>
+    <label><span data-i18n="name">Your name</span> <input name="name" required maxlength="48" autocomplete="nickname"></label>
+    <label><span data-i18n="pin">Private room PIN</span> <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="off"></label>
+    <button class="action" type="submit" data-i18n="join" disabled>Join</button>
   </form>
   <section id="game" hidden>
     <p id="score"></p>
-    <div id="board" aria-label="Bàn Caro"></div>
-    <button id="leave" type="button" class="action">Rời phòng</button>
+    <div id="board" data-i18n-label="boardLabel" aria-label="Caro board"></div>
+    <p id="rematch-note" hidden></p>
+    <div class="actions">
+      <button id="rematch" type="button" class="action" data-i18n="rematch" hidden>Play again</button>
+      <button id="leave" type="button" class="action" data-i18n="leave">Leave</button>
+    </div>
   </section>
-  <p id="status" role="status">Đang kết nối Claude Desktop…</p>
+  <p id="status" role="status">Connecting to Claude Desktop…</p>
   <p id="error" role="alert" hidden></p>
 </main>
 <script>
 const get = id => document.getElementById(id);
-const form = get('join'), board = get('board'), leave = get('leave');
+const form = get('join'), board = get('board'), leave = get('leave'), rematch = get('rematch');
 const requests = new Map();
 let sequence = 0, ready = false, stopped = false, timer, room, version, renderedGame, busy = false, polling = false;
 let actionRevision = 0;
-const messages = {
-  'invalid-link': 'Link mời LAN không hợp lệ.',
-  'invalid-name': 'Tên người chơi không hợp lệ.',
-  'pin-required': 'Phòng yêu cầu mã PIN.',
-  'wrong-pin': 'Mã PIN không đúng.',
-  'invalid-pin': 'Mã PIN phải có 4 đến 6 chữ số.',
-  'room-not-found': 'Không tìm thấy phòng. Thử link có địa chỉ LAN.',
-  'room-full': 'Phòng đã đủ người.',
-  'room-active': 'Bạn đã ở trong một phòng.',
-  'connect-timeout': 'Không kết nối được máy host.',
-  'stale-move': 'Bàn đã thay đổi. Hãy thử lại sau khi cập nhật.',
-  'move-unavailable': 'Chưa thể đánh nước này.',
-  'daemon-unavailable': 'Không kết nối được tiến trình Clarcade trên máy.',
-  'node-required': 'Cần cài Node.js 22 trở lên trên máy để kết nối phòng LAN.',
-  'view-timeout': 'Claude Desktop chưa trả lời giao diện Clarcade.',
+// The board follows the language Claude Desktop reports for its UI
+// (hostContext.locale), then the browser's; anything but Vietnamese is English.
+const words = {
+  en: {
+    expand: 'Expand', link: 'LAN invitation link', name: 'Your name', pin: 'Private room PIN', join: 'Join',
+    leave: 'Leave', rematch: 'Play again', rematchWaiting: 'Waiting for your opponent to play again…',
+    rematchOffered: 'Your opponent wants to play again.', boardLabel: 'Caro board', connecting: 'Connecting to Claude Desktop…',
+    pasteLink: 'Paste the LAN invitation link from the host.',
+    unsupportedSize: 'This preview supports 15 × 15 rooms. Start a new game from Claude Code.',
+    score: (room, host, guest, mark) => `${room} · ${host} / ${guest} · You play ${mark}`,
+    draw: 'Draw', youWon: 'You won', opponentWon: 'Your opponent won', reconnecting: 'Reconnecting…',
+    confirming: 'Confirming…', yourTurn: 'Your turn', theirTurn: "Opponent's turn",
+    cell: (x, y, mark) => `Cell ${x}, ${y}${mark ? ': ' + mark : ''}`,
+    leaveConfirm: 'Leaving a game in progress may count as a loss. Leave the room?',
+    error: reason => 'Clarcade reported an error: ' + reason,
+    errors: {
+      'invalid-link': 'That LAN invitation link is not valid.',
+      'invalid-name': 'That name is not valid.',
+      'pin-required': 'This room needs a PIN.',
+      'wrong-pin': 'The PIN is not correct.',
+      'invalid-pin': 'The PIN has 4 to 6 digits.',
+      'room-not-found': 'Room not found. Try a link that includes the LAN address.',
+      'room-full': 'The room is full.',
+      'room-active': 'You are already in a room.',
+      'connect-timeout': 'Could not reach the host.',
+      'stale-move': 'The board changed. Try again after it updates.',
+      'move-unavailable': 'You cannot play that move yet.',
+      'daemon-unavailable': 'Could not reach the Clarcade process on this machine.',
+      'node-required': 'Install Node.js 22 or later on this machine to join LAN rooms.',
+      'view-timeout': 'Claude Desktop did not answer the Clarcade board.',
+      'rematch-unavailable': 'You can play again once the game is over and both players are connected.',
+      'stale-game': 'That game has already changed.',
+    },
+  },
+  vi: {
+    expand: 'Mở rộng', link: 'Link mời LAN', name: 'Tên người chơi', pin: 'PIN phòng riêng', join: 'Vào phòng',
+    leave: 'Rời phòng', rematch: 'Chơi lại', rematchWaiting: 'Đang chờ đối thủ đồng ý chơi lại…',
+    rematchOffered: 'Đối thủ muốn chơi lại.', boardLabel: 'Bàn Caro', connecting: 'Đang kết nối Claude Desktop…',
+    pasteLink: 'Dán link LAN từ người tạo phòng.',
+    unsupportedSize: 'Bản thử hỗ trợ phòng 15 × 15. Hãy tạo ván mới ở phía Code.',
+    score: (room, host, guest, mark) => `${room} · ${host} / ${guest} · Bạn cầm ${mark}`,
+    draw: 'Hòa', youWon: 'Bạn thắng', opponentWon: 'Đối thủ thắng', reconnecting: 'Đang kết nối lại…',
+    confirming: 'Đang xác nhận…', yourTurn: 'Đến lượt bạn', theirTurn: 'Đến lượt đối thủ',
+    cell: (x, y, mark) => `Ô ${x}, ${y}${mark ? ': ' + mark : ''}`,
+    leaveConfirm: 'Rời phòng đang chơi có thể bị tính thua. Rời phòng?',
+    error: reason => 'Clarcade báo lỗi: ' + reason,
+    errors: {
+      'invalid-link': 'Link mời LAN không hợp lệ.',
+      'invalid-name': 'Tên người chơi không hợp lệ.',
+      'pin-required': 'Phòng yêu cầu mã PIN.',
+      'wrong-pin': 'Mã PIN không đúng.',
+      'invalid-pin': 'Mã PIN phải có 4 đến 6 chữ số.',
+      'room-not-found': 'Không tìm thấy phòng. Thử link có địa chỉ LAN.',
+      'room-full': 'Phòng đã đủ người.',
+      'room-active': 'Bạn đã ở trong một phòng.',
+      'connect-timeout': 'Không kết nối được máy host.',
+      'stale-move': 'Bàn đã thay đổi. Hãy thử lại sau khi cập nhật.',
+      'move-unavailable': 'Chưa thể đánh nước này.',
+      'daemon-unavailable': 'Không kết nối được tiến trình Clarcade trên máy.',
+      'node-required': 'Cần cài Node.js 22 trở lên trên máy để kết nối phòng LAN.',
+      'view-timeout': 'Claude Desktop chưa trả lời giao diện Clarcade.',
+      'rematch-unavailable': 'Chỉ chơi lại được khi ván đã kết thúc và hai bên đều đang kết nối.',
+      'stale-game': 'Ván này đã thay đổi.',
+    },
+  },
 };
+const languageOf = locale => /^vi(?:$|[-_])/i.test(String(locale ?? '')) ? 'vi' : 'en';
+let language = languageOf(navigator.language);
+let lastError = null;
+const t = () => words[language];
+function setLanguage(locale) {
+  const next = languageOf(locale);
+  if (next === language && document.documentElement.lang === next) return;
+  language = next;
+  document.documentElement.lang = next;
+  for (const element of document.querySelectorAll('[data-i18n]')) element.textContent = t()[element.dataset.i18n];
+  for (const element of document.querySelectorAll('[data-i18n-label]')) {
+    element.setAttribute('aria-label', t()[element.dataset.i18nLabel]);
+  }
+  if (!ready) get('status').textContent = t().connecting;
+  showError(lastError);
+  render();
+}
 function send(message) { window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*'); }
 function request(method, params) {
   return new Promise((resolve, reject) => {
@@ -81,7 +154,8 @@ function request(method, params) {
   });
 }
 function showError(error) {
-  get('error').textContent = error ? (messages[error.message] ?? ('Clarcade báo lỗi: ' + error.message)) : '';
+  lastError = error;
+  get('error').textContent = error ? (t().errors[error.message] ?? t().error(error.message)) : '';
   get('error').hidden = !error;
 }
 async function tool(name, args = {}) {
@@ -104,16 +178,17 @@ function render() {
   get('game').hidden = !room;
   form.querySelector('button').disabled = !ready || busy;
   leave.disabled = busy;
+  rematch.disabled = busy;
   if (!ready) return;
   if (!room) {
-    get('status').textContent = 'Dán link LAN từ người tạo phòng.';
+    get('status').textContent = t().pasteLink;
     return;
   }
   const size = room.boardSize;
   if (size !== 15) {
     board.replaceChildren();
     renderedGame = undefined;
-    get('status').textContent = 'Bản thử hỗ trợ phòng 15 × 15. Hãy tạo ván mới ở phía Code.';
+    get('status').textContent = t().unsupportedSize;
     return;
   }
   const edge = (size - 1) / 2;
@@ -140,16 +215,21 @@ function render() {
     const key = `${x},${y}`, mark = cells.get(key) ?? '';
     cell.dataset.mark = mark;
     if (cell.textContent !== mark) cell.textContent = mark;
-    cell.setAttribute('aria-label', `Ô ${x}, ${y}${mark ? ': ' + mark : ''}`);
+    cell.setAttribute('aria-label', t().cell(x, y, mark));
     cell.classList.toggle('latest', last?.x === x && last.y === y);
     cell.classList.toggle('win', won.has(key));
     cell.disabled = !canPlay || Boolean(mark) || (!room.moves.length && (x !== 0 || y !== 0));
   }
-  get('score').textContent = `${room.roomName} · ${room.hostName} / ${room.guestName} · Bạn cầm ${room.mark}`;
-  get('status').textContent = room.finished ? (room.finished.winner === null ? 'Hòa' : room.won ? 'Bạn thắng' : 'Đối thủ thắng')
-    : room.connection !== 'connected' ? 'Đang kết nối lại…'
-      : busy || room.pendingMove ? 'Đang xác nhận…'
-        : room.turn === room.mark ? 'Đến lượt bạn' : 'Đến lượt đối thủ';
+  get('score').textContent = t().score(room.roomName, room.hostName, room.guestName, room.mark);
+  const text = t();
+  const over = Boolean(room.finished)
+  rematch.hidden = !over || room.rematchVoted || room.connection !== 'connected';
+  get('rematch-note').hidden = !over || !(room.rematchVoted || room.rematchOffered);
+  get('rematch-note').textContent = room.rematchVoted ? text.rematchWaiting : room.rematchOffered ? text.rematchOffered : '';
+  get('status').textContent = room.finished ? (room.finished.winner === null ? text.draw : room.won ? text.youWon : text.opponentWon)
+    : room.connection !== 'connected' ? text.reconnecting
+      : busy || room.pendingMove ? text.confirming
+        : room.turn === room.mark ? text.yourTurn : text.theirTurn;
 }
 function schedule() {
   clearTimeout(timer);
@@ -182,12 +262,16 @@ form.addEventListener('submit', event => {
   void action('join_room', { link: String(values.get('link')).trim(), name: String(values.get('name')).trim(),
     ...(pin && { pin }) });
 });
+rematch.addEventListener('click', () => {
+  if (room?.finished) void action('rematch', { gameId: room.gameId });
+});
 leave.addEventListener('click', () => {
   if (!room) return;
-  if (room.status === 'playing' && !window.confirm('Rời phòng đang chơi có thể bị tính thua. Rời phòng?')) return;
+  if (room.status === 'playing' && !window.confirm(t().leaveConfirm)) return;
   void action('leave_room', { gameId: room.gameId });
 });
 function setHost(context) {
+  if (context?.locale) setLanguage(context.locale);
   const theme = context?.theme;
   if (theme === 'dark' || theme === 'light') document.documentElement.style.colorScheme = theme;
   get('expand').hidden = !context?.availableDisplayModes?.includes('fullscreen') || context.displayMode === 'fullscreen';
@@ -214,7 +298,7 @@ window.addEventListener('message', event => {
 });
 async function start() {
   const result = await request('ui/initialize', {
-    protocolVersion: '2026-01-26', appInfo: { name: 'Clarcade', version: '0.1.1' },
+    protocolVersion: '2026-01-26', appInfo: { name: 'Clarcade', version: '0.1.2' },
     appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
   });
   if (!result?.protocolVersion) throw new Error('daemon-unavailable');
@@ -227,6 +311,7 @@ async function start() {
   } })).observe(document.querySelector('main'));
   await poll();
 }
+setLanguage(navigator.language);
 void start().catch(showError);
 </script>
 </body>

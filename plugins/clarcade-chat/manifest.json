@@ -1,9 +1,9 @@
 {
   "manifest_version": "0.3",
-  "name": "clarcade-chat-preview",
-  "display_name": "Clarcade Chat Preview",
-  "version": "0.1.1",
-  "description": "Join a Clarcade LAN room and play Caro inside Claude Desktop Chat.",
+  "name": "clarcade-chat",
+  "display_name": "Clarcade",
+  "version": "0.1.2",
+  "description": "Play Caro (Gomoku) on your LAN inside a Claude Desktop chat. Join rooms hosted with Clarcade in Claude Code.",
   "author": { "name": "DNDark" },
   "license": "MIT",
   "server": {

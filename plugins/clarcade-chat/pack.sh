@@ -4,7 +4,7 @@ set -eu
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 case "${1:-}" in
   /*.mcpb) output=$1 ;;
-  *) printf '%s\n' 'Usage: sh pack.sh /absolute/path/to/clarcade-chat-preview.mcpb' >&2; exit 2 ;;
+  *) printf '%s\n' 'Usage: sh pack.sh /absolute/path/to/clarcade-chat-<version>.mcpb' >&2; exit 2 ;;
 esac
 if [ -e "$output" ]; then
   printf '%s\n' 'The destination already exists. Choose a new output file.' >&2

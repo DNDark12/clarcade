@@ -12,6 +12,7 @@ import { parseLink } from '../clarcade/hooks/link.js'
 import { name as validName, validMove } from '../clarcade/helper/protocol.mjs'
 
 const execute = promisify(execFile)
+// Kept from the 0.1.1 preview so a game in progress survives the upgrade.
 const dataDir = process.env.CLARCADE_CHAT_DATA_DIR || join(homedir(), '.clarcade-chat-preview')
 const args = [...process.argv.slice(2), '--data-dir', dataDir]
 const { socketPath } = runtime(args, false)
@@ -36,6 +37,8 @@ const tools = [
   { name: 'play_move', description: 'Place the guest stone at the clicked coordinates.',
     inputSchema: object({ gameId: string, moveNo: integer, moveEpoch: integer, x: integer, y: integer },
       ['gameId', 'moveNo', 'moveEpoch', 'x', 'y']), _meta: privateTool },
+  { name: 'rematch', description: 'Vote to play again after the game ends. A new game starts when both players vote.',
+    inputSchema: object({ gameId: string }, ['gameId']), _meta: privateTool },
   { name: 'leave_room', description: 'Leave the current LAN match.',
     inputSchema: object({ gameId: string }, ['gameId']), _meta: privateTool },
 ]
@@ -100,10 +103,12 @@ function guestSnapshot(snapshot) {
   const { version, room } = snapshot
   if (room?.role !== 'guest') return { version, room: null }
   const { gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
-    pendingMove, winLine, finished, host, guest } = room
+    pendingMove, winLine, finished, host, guest, rematchVotes = [] } = room
   return { version, room: { gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
     pendingMove: Boolean(pendingMove), winLine, finished,
-    hostName: host.name, guestName: guest?.name, won: finished?.winner === guest?.playerId } }
+    hostName: host.name, guestName: guest?.name, won: finished?.winner === guest?.playerId,
+    // Who has asked for another game; it starts once both have.
+    rematchVoted: rematchVotes.includes(guest?.playerId), rematchOffered: rematchVotes.includes(host.playerId) } }
 }
 
 async function state(version) {
@@ -150,6 +155,13 @@ async function call(name, input) {
       const response = await daemon('/move', { gameId, moveNo, moveEpoch, x, y })
       return response.status === 200 ? result({ ok: true, ...await state() }) : failure(response.data?.reason ?? 'move-failed')
     }
+    case 'rematch': {
+      const { room } = await state()
+      if (!room || room.gameId !== input.gameId) return failure('stale-game')
+      if (room.status !== 'finished' || room.connection !== 'connected') return failure('rematch-unavailable')
+      const response = await daemon('/action', { gameId: room.gameId, action: 'rematch' })
+      return response.status === 200 ? result({ ok: true, ...await state() }) : failure(response.data?.reason ?? 'rematch-failed')
+    }
     case 'leave_room': {
       const { room } = await state()
       if (!room || room.gameId !== input.gameId) return failure('stale-game')
@@ -171,7 +183,7 @@ async function handle({ id, method, params = {} }) {
   switch (method) {
     case 'initialize':
       payload = { protocolVersion: protocols.includes(params.protocolVersion) ? params.protocolVersion : protocols[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat-preview', version: '0.1.1' } }
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat', version: '0.1.2' } }
       break
     case 'ping': payload = {}; break
     case 'tools/list': payload = { tools }; break
