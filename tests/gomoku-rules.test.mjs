@@ -68,12 +68,12 @@ test('accepts X at the origin and alternates turns without mutating the previous
   assert.equal(first.state.board.size, 1)
 })
 
-test('requires the first move at the origin', () => {
+test('the first move may go on any cell, not only the center', () => {
   const state = { board: new Map(), turn: 'X', winLine: null }
 
-  assert.deepEqual(applyMove(state, { x: 1, y: 0, mark: 'X' }), {
-    ok: false, reason: 'first-move-origin',
-  })
+  const first = applyMove(state, { x: 4, y: -3, mark: 'X' })
+  assert.equal(first.ok, true)
+  assert.equal(first.state.board.get('4,-3'), 'X')
   assert.equal(state.board.size, 0)
 })
 
@@ -146,4 +146,11 @@ test('Caro counts the edge as open and checks the other directions after a block
   board.set('-3,7', 'O')
   board.set('3,7', 'O')
   assert.deepEqual(findWinLine(board, { x: 0, y: 7 }, 'vn'), line)
+})
+
+test('a game whose first stone is off center restores and syncs to the guest', async () => {
+  const { restoreGame } = await import('../plugins/clarcade/helper/protocol.mjs')
+  const game = restoreGame([{ x: 3, y: 2, mark: 'X' }, { x: 0, y: 0, mark: 'O' }])
+  assert.equal(game.board.get('3,2'), 'X')
+  assert.equal(game.turn, 'X')
 })

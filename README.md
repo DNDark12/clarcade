@@ -121,7 +121,7 @@ The extension keeps its data in `~/.clarcade-chat-preview`, separate from the Cl
 2. Choose the rules and visibility, enter a room name and press **Create room**. Open **Room options** to change the turn clock or reconnect window.
 3. For a public room, the other player can select it from **Join room**. To send an invitation, press **Copy link**. For a private room, share the PIN separately.
 
-When the guest joins, an open host pane switches from the waiting screen to the board. The host places the first stone in the center. If you closed the pane, run `/clarcade` again to see the current board.
+When the guest joins, an open host pane switches from the waiting screen to the board. The first player can place the first stone on any cell. If you closed the pane, run `/clarcade` again to see the current board.
 
 If the other player cannot find the room, open **Connection help**, select your LAN address and press **Copy link**. The resulting link connects straight to your machine.
 
@@ -133,7 +133,7 @@ You can also run `/clarcade join <link|room name>` or paste an invite link on it
 
 ### Placing stones and moving around the board
 
-- Press and release on a cell to place a stone. While holding the mouse button, drag to another cell to change the target or release outside the board to cancel. The first move is always at the center.
+- Press and release on a cell to place a stone. While holding the mouse button, drag to another cell to change the target or release outside the board to cancel.
 - After clicking the board, use the arrow keys to move the cursor and `Enter` or `Space` to place a stone.
 - `Shift` + arrow moves 5 cells, `C` jumps to the last move and `H` to the center. `Esc` returns the keyboard to the prompt.
 

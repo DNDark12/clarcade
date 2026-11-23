@@ -183,7 +183,7 @@ async function handle({ id, method, params = {} }) {
   switch (method) {
     case 'initialize':
       payload = { protocolVersion: protocols.includes(params.protocolVersion) ? params.protocolVersion : protocols[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat', version: '0.1.3' } }
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat', version: '0.1.4' } }
       break
     case 'ping': payload = {}; break
     case 'tools/list': payload = { tools }; break

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "clarcade-chat",
   "display_name": "Clarcade",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Play Caro (Gomoku) on your LAN inside a Claude Desktop chat. Join rooms hosted with Clarcade in Claude Code.",
   "author": {
     "name": "DNDark"

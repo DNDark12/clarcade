@@ -19,9 +19,6 @@ export function applyMove(state, { x, y, mark }) {
   if (!validCoordinate(x, boardSize) || !validCoordinate(y, boardSize)) {
     return { ok: false, reason: 'invalid-coordinates' }
   }
-  if (state.board.size === 0 && (x !== 0 || y !== 0)) {
-    return { ok: false, reason: 'first-move-origin' }
-  }
 
   const key = `${x},${y}`
   if (state.board.has(key)) {

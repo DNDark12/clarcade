@@ -33,7 +33,7 @@ export default function Board(props, surface) {
     const state = { ...view, gameId: props.gameId, boardVersion: props.boardVersion, moveEpoch: props.moveEpoch }
     surface.setState({ ...state, dragging })
     if (!action) return
-    const legal = props.enabled && markAt(view) === '.' && (!props.first || (view.x === 0 && view.y === 0))
+    const legal = props.enabled && markAt(view) === '.'
     surface.post({ ...state, kind: action === 'move' && legal ? 'move' : 'view' })
   }
 

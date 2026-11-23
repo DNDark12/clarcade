@@ -81,7 +81,7 @@ export function restoreGame(moves, ruleset = DEFAULT_RULESET, boardSize = BOARD_
   let turn = 'X'
   let winLine = null
   for (const move of moves) {
-    if (!isHistoryMove(move, boardSize) || move.mark !== turn || (board.size === 0 && (move.x || move.y))) {
+    if (!isHistoryMove(move, boardSize) || move.mark !== turn) {
       throw new Error('invalid-history')
     }
     const key = `${move.x},${move.y}`

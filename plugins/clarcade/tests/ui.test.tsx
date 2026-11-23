@@ -372,9 +372,6 @@ for (const surface of surfaces) {
         expect(Math.round(2 * Number(tile?.props.marginX) * 8.8)).toBe(4)
       }
       expect(Boolean(await ui.find({ type: 'Text', text: /More cells off-screen/ }))).toBe(surface === 'terminal')
-      await ui.pointer({ type: 'down', x: 0, y: 0, button: 'left', in: 'board' })
-      await ui.pointer({ type: 'up', x: 0, y: 0, button: 'left', in: 'board' })
-      expect(f.requests.filter(call => call.path === '/move')).toHaveLength(0)
       await ui.pointer({ type: 'down', ...(surface === 'desktop' ? desktopClick : terminalClick), button: 'left', in: 'board' })
       await ui.pointer({ type: 'up', ...(surface === 'desktop' ? desktopClick : terminalClick), button: 'left', in: 'board' })
       expect(f.requests.filter(call => call.path === '/move').map(call => call.body)).toEqual([
@@ -638,5 +635,24 @@ test('a host you have never played is marked as a new opponent', async ($, on) =
   await ui.press({ key: 'tab-join' })
   await f.clock.advance(3000)
   expect(await ui.find({ type: 'Button', key: 'join-K7M2QX-192.168.0.20-49000', text: /new opponent/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+// The first stone may go anywhere: pressing Enter off center plays there.
+test('the first move can be played off center', async ($, on) => {
+  const f = fixture(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const ui = await $.ui.mount(pane('terminal', 80))
+  await ui.input({ key: 'player-name', text: 'An' })
+  f.change({ ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' } })
+  await f.clock.advance(3000)
+  await ui.key({ key: 'right', in: 'board' })
+  await ui.key({ key: 'right', in: 'board' })
+  await ui.key({ key: 'up', in: 'board' })
+  await ui.key({ key: 'return', in: 'board' })
+  expect(f.requests.filter(call => call.path === '/move').map(call => call.body)).toEqual([
+    { gameId: 'game-1', moveNo: 1, moveEpoch: 0, x: 2, y: -1 },
+  ])
   await ui.unmount()
 })

@@ -56,7 +56,7 @@ export function boardProps(room, view, enabled, columns, lines, { board: style, 
     last: last ?? null, win: room.winLine ?? [], gameId: room.gameId,
     view, enabled, lines: visible.height * cellHeight + Number(grid) + Number(rulers),
     cropped: visible.width < width || visible.height < boardHeight,
-    pieces, first: room.moves.length === 0, boardVersion: room.boardVersion, moveEpoch: room.moveEpoch ?? 0,
+    pieces, boardVersion: room.boardVersion, moveEpoch: room.moveEpoch ?? 0,
   }
 }
 
