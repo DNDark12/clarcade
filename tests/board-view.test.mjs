@@ -46,30 +46,50 @@ test('Desktop grid uses one native row per cell and shares the pointer origin', 
   const layout = boardLayout(wide)
   assert.equal(wide.cropped, false)
   assert.equal(layout.cellHeight, 1)
-  assert.equal(layout.cellWidth * 8.8, 20)
+  assert.equal(layout.cellWidth * 8.8, layout.cellHeight * 20)
   assert.deepEqual(pointerCell(layout, wide.rulers, { x: 41, y: 8 }), { x: 0, y: 0 })
-  assert.deepEqual(pointerCell(layout, wide.rulers, { x: 58, y: 16 }), { x: 7, y: 7 })
-  assert.equal(pointerCell(layout, wide.rulers, { x: 59, y: 16 }), null)
+  assert.deepEqual(pointerCell(layout, wide.rulers, { x: 57, y: 15 }), { x: 7, y: 7 })
+  assert.equal(pointerCell(layout, wide.rulers, { x: 57, y: 16 }), null)
+  assert.equal(pointerCell(layout, wide.rulers, { x: 59, y: 15 }), null)
 
   const narrow = boardProps({ ...room, moves: [{ x: 0, y: 0, mark: 'X' }, { x: 5, y: 0, mark: 'O' }] }, null, true, 24, 18, grid, true)
   assert.equal(narrow.cropped, true)
   assert.equal(boardLayout(narrow).width, 10)
 })
 
-test('Desktop keeps the same fifteen-by-fifteen grid and one-pixel strokes through edge moves', () => {
+test('Desktop uses square 16px tiles with even 4px gaps and rejects ambiguous coarse clicks', () => {
+  const props = boardProps(room, null, true, 80, 18, grid, true)
+  const layout = boardLayout(props)
+  const gapX = (layout.cellWidth - DESKTOP_GRID.tileWidth) * 8.8
+  const gapY = (layout.cellHeight - DESKTOP_GRID.tileHeight) * 20
+  assert.equal(Math.round(gapX), 4)
+  assert.equal(Math.round(gapY), 4)
+  const origin = layout.offset + layout.ruler
+  for (let column = 0; column < layout.width; column++) {
+    const left = origin + column * layout.cellWidth + (layout.cellWidth - DESKTOP_GRID.tileWidth) / 2
+    for (const y of [1, 15]) {
+      const expected = { x: column - 7, y: y - 8 }
+      for (let px = 0; px < 16; px++) {
+        const fineX = left + (px + 0.5) / 8.8
+        const coarseX = Math.floor(fineX)
+        const overlaps = Array.from({ length: layout.width }, (_, index) =>
+          origin + index * layout.cellWidth + gapX / 2 / 8.8)
+          .filter(start => start < coarseX + 1 && start + DESKTOP_GRID.tileWidth > coarseX)
+        assert.deepEqual(pointerCell(layout, true, { x: coarseX, y }), overlaps.length === 1 ? expected : null)
+        assert.deepEqual(pointerCell(layout, true, { x: Math.floor(fineX), y,
+          fine: { x: fineX, y: y + 0.75 } }), expected)
+      }
+    }
+  }
+})
+
+test('Desktop keeps the same fifteen-by-fifteen grid through edge moves', () => {
   const moves = Array.from({ length: 8 }, (_, x) => ({ x, y: 0, mark: x % 2 ? 'O' : 'X' }))
   for (let count = 0; count <= moves.length; count++) {
     const props = boardProps({ ...room, moves: moves.slice(0, count) }, null, true, 80, 18, grid, true)
     const layout = boardLayout(props)
     assert.deepEqual([props.minX, props.maxX, props.minY, props.maxY, layout.width, layout.height], [-7, 7, -7, 7, 15, 15])
     assert.equal(props.cells.length, 225)
-    const left = layout.offset + layout.ruler
-    const verticalLines = Array.from({ length: layout.width + 1 }, (_, index) => {
-      const column = left + index * layout.cellWidth
-      return [Math.round(column * 8.8), Math.round((column + DESKTOP_GRID.verticalStroke) * 8.8)]
-    })
-    assert.equal(new Set(verticalLines.map(([start]) => start)).size, layout.width + 1)
-    assert(verticalLines.every(([start, end]) => end === start + 1))
-    assert.equal(DESKTOP_GRID.horizontalStroke * 20, 1)
+    assert.equal(DESKTOP_GRID.tileWidth * 8.8, DESKTOP_GRID.tileHeight * 20)
   }
 })

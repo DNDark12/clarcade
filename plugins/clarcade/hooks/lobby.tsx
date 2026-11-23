@@ -2,7 +2,7 @@ import { boardProps, pieceGlyphs } from '../games/gomoku/board-view.js'
 import { roomLinks } from './link.js'
 import { resultReason, ruleText } from './i18n.ts'
 import { details, summary } from './statistics.ts'
-import { pieceColor, statusColor } from './ui/tokens.ts'
+import { piecePalette, statusColor } from './ui/tokens.ts'
 
 export function roomStatus(room, t) {
   if (room.status === 'waiting') return t.waiting
@@ -40,12 +40,15 @@ export function lobby(elements, event, ui, actions, t) {
   const canPlay = supported && Client
   const columns = Math.max(8, event.props.bodyColumns || 36)
   const compact = columns < 48
+  const desktop = event.surface === 'desktop'
   const recover = (ui.helperDown || ui.nodeMissing || ui.error === t.unavailable) &&
     button('recover-helper', t.recover, actions.recover, true)
-  const feedback = ui.busy ? text(t.loading, { dimColor: true }) :
-    ui.error || ui.nodeMissing || ui.helperDown
-      ? notice(ui.error || (ui.nodeMissing ? t.nodeMissing : t.unavailable), 'error', recover)
-      : ui.notice ? notice(ui.notice) : null
+  const alert = ui.error || ui.nodeMissing || ui.helperDown
+    ? notice(ui.error || (ui.nodeMissing ? t.nodeMissing : t.unavailable), 'error', recover)
+    : ui.notice ? notice(ui.notice) : null
+  const feedback = ui.busy ? text(t.loading, { dimColor: true }) : alert
+  // During a game nothing above the board may appear or disappear, so the board never moves.
+  const playing = Boolean(room && room.status !== 'waiting' && ui.tab !== 'stats' && ui.tab !== 'settings')
 
   if (!canPlay) return column([
     header(), text(t.fallback),
@@ -62,7 +65,7 @@ export function lobby(elements, event, ui, actions, t) {
   return column([
     header(),
     ui.tab !== 'home' && nav(),
-    feedback,
+    !playing && feedback,
     ...(ui.tab === 'stats' ? statistics() : ui.tab === 'settings' ? settings() :
       room ? game() : ui.tab === 'join' ? join() : ui.tab === 'host' ? host() : home()),
     ui.tab === 'home' && nav(),
@@ -79,16 +82,18 @@ export function lobby(elements, event, ui, actions, t) {
 
   function header() {
     return row([
-      text(` ${t.title} `, { bold: true, color: 'inverseText', backgroundColor: pieceColor.X }),
+      text(` ${t.title} `, { bold: true, color: 'inverseText', backgroundColor: piecePalette(desktop).X }),
       room && text(` · ${room.roomName} `, { bold: true, wrap: 'truncate-end' }),
       room && text(` ${ruleText(room.ruleset, t)} `, { color: 'inverseText', backgroundColor: 'subtle' }),
     ])
   }
 
-  function notice(message, color = 'inactive', action = null) {
+  function notice(message, color = 'inactive', action = null, oneLine = false) {
     return Box({
       flexDirection: 'column', borderStyle: 'single', borderColor: color, borderDimColor: color === 'inactive',
-      paddingX: 1, children: [text(message, { bold: color !== 'inactive' }), action].filter(Boolean),
+      paddingX: 1, children: [text(message, {
+        bold: color !== 'inactive', ...(oneLine && { wrap: 'truncate-end', tabular: true }),
+      }), action].filter(Boolean),
     })
   }
 
@@ -101,12 +106,12 @@ export function lobby(elements, event, ui, actions, t) {
 
   function playerBar() {
     const host = room.role === 'host'
-    const glyphs = pieceGlyphs(ui.settings.pieces, event.surface === 'desktop')
+    const glyphs = pieceGlyphs(ui.settings.pieces, desktop)
     const { wins = 0, losses = 0 } = ui.headToHead ?? {}
     const score = text(` ${host ? wins : losses}–${host ? losses : wins} `, { bold: true, tabular: true })
     const player = (mark, person, own) => {
       const active = room.status === 'playing' && room.turn === mark
-      const color = pieceColor[mark]
+      const color = piecePalette(desktop)[mark]
       const online = own || room.connection === 'connected'
       return text([
         text(active ? '▸ ' : '  ', { color: active && online ? 'success' : 'inactive' }),
@@ -192,7 +197,7 @@ export function lobby(elements, event, ui, actions, t) {
     const canMove = room.status === 'playing' && room.connection === 'connected' &&
       room.mark === room.turn && !room.pendingMove && !ui.busy && secondsLeft !== 0
     const rows = Math.max(7, Math.min(32, (event.props.scroll?.bodyRows || 23) - 5))
-    const contents = boardProps(room, ui.view, canMove, columns, rows, ui.settings, event.surface === 'desktop')
+    const contents = boardProps(room, ui.view, canMove, columns, rows, ui.settings, desktop)
     const myId = room.role === 'host' ? room.host.playerId : room.guest?.playerId
     const voted = room.rematchVotes.includes(myId)
     const canClaim = room.role === 'host' && room.disconnectedAt && ui.now >= room.disconnectedAt + room.holdMs &&
@@ -204,15 +209,15 @@ export function lobby(elements, event, ui, actions, t) {
         room.disconnectedAt && room.status === 'playing' &&
           `${Math.max(0, Math.floor((ui.now - room.disconnectedAt) / 1000))} ${t.seconds}`,
         room.turnMs > 0 && secondsLeft !== null && room.connection === 'connected' && `${secondsLeft} ${t.seconds}`,
-      ].filter(Boolean).join(' · '), outcome ? outcome === t.win ? 'success' : outcome === t.loss ? 'error' : 'warning' : statusColor(room)),
-      room.moveLimit > 0 && text(`${t.moveLimit} · ${room.moveLimit}`, { dimColor: true }),
-      text(`${t.move} ${room.boardVersion}`, { dimColor: true, tabular: true }),
-      contents.cropped ? text(t.boardCropped, { color: 'warning', bold: true }) :
-        canMove && text(t.boardPlace, { dimColor: true }),
+        room.moveLimit > 0 && `${room.boardVersion}/${room.moveLimit}`,
+      ].filter(Boolean).join(' · '), outcome ? outcome === t.win ? 'success' : outcome === t.loss ? 'error' : 'warning' : statusColor(room),
+      null, true),
       Client({
         key: 'board', module: '../games/gomoku/board.client.tsx', width: '100%', height: contents.lines,
         props: contents,
       }),
+      alert,
+      contents.cropped && text(t.boardCropped, { dimColor: true }),
       column([
         ...(room.status === 'playing' && room.connection === 'connected' ? gameActions(room, myId) : []),
         room.status === 'finished' && (voted ? text(`${t.waitingVote} · ${room.role === 'host' ? room.guest.name : room.host.name}`) :
@@ -316,8 +321,10 @@ export function lobby(elements, event, ui, actions, t) {
         picker('notifications', t.notifications, ['toast', 'sound', 'band', 'off'].map(value => [value, t[value]]),
           current.notifications, set('notifications')),
         picker('board', t.board, [['grid', t.grid], ['dots', t.dots]], current.board, set('board')),
-        picker('pieces', t.pieces, [['xo', event.surface === 'desktop' ? '✕ / ○' : 'X / O'], ['oo', '● / ○'], ['pixel', '■ / □']],
-          current.pieces, set('pieces')),
+        picker('pieces', t.pieces, ['xo', 'oo', 'pixel'].map(style => {
+          const { X, O } = pieceGlyphs(style, desktop)
+          return [style, `${X} / ${O}`]
+        }), current.pieces, set('pieces')),
         event.surface === 'terminal' && current.pieces !== 'xo' && text(t.glyphHint, { dimColor: true }),
         button('toggle-network', `${ui.network ? '▾' : '▸'} ${t.network}`, () => actions.edit('network', !ui.network)),
         ...(ui.network ? [

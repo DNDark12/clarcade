@@ -63,7 +63,7 @@ You can also run `/clarcade join <link|room name>` or paste an invite link on it
 
 ### Placing stones and moving around the board
 
-- Click a cell to place a stone. The first move is always at the center.
+- Press and release on a cell to place a stone. While holding the mouse button, drag to another cell to change the target or release outside the board to cancel. The first move is always at the center.
 - After clicking the board, use the arrow keys to move the cursor and `Enter` or `Space` to place a stone.
 - `Shift` + arrow moves 5 cells, `C` jumps to the last move and `H` to the center. `Esc` returns the keyboard to the prompt.
 

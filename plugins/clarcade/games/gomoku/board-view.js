@@ -3,25 +3,38 @@ import { bounds } from './rules.js'
 const GRID_CELL_WIDTH = 3
 const DESKTOP_COLUMN_PX = 8.8
 const DESKTOP_ROW_PX = 20
+const DESKTOP_TILE_PX = 16
+// A dense viewport must stay below the Client's 100,000-character tree limit.
+const DESKTOP_VIEW_COLUMNS = 20
+const DESKTOP_VIEW_CELLS = 240
 
-// Desktop converts native Box dimensions to CSS pixels. Fractional pixel advances
-// or an oversized stroke let the renderer snap some grid lines wider than others.
+// Use the same pixel step and tile size in both directions.
 export const DESKTOP_GRID = {
   cellWidth: DESKTOP_ROW_PX / DESKTOP_COLUMN_PX,
+  tileWidth: DESKTOP_TILE_PX / DESKTOP_COLUMN_PX,
+  tileHeight: DESKTOP_TILE_PX / DESKTOP_ROW_PX,
   verticalStroke: 1 / DESKTOP_COLUMN_PX,
   horizontalStroke: 1 / DESKTOP_ROW_PX,
 }
+
+// Desktop centres a piece's text line in its 16 px tile, but each glyph sits at
+// its own height in that line. Lifts measured on Claude Desktop screenshots
+// (2026-11-23): letters are already centred, the solid disc sits 1 px low and
+// the outlined disc, drawn from a fallback font, lower still. Pixel pieces are
+// drawn with Boxes instead (see board.client.tsx).
+export const DESKTOP_GLYPH_LIFT_PX = { X: 0, O: 0, '●': 1, '◉': 1.5 }
 
 const GLYPHS = {
   xo: { X: 'X', O: 'O' },
   oo: { X: '●', O: '○' },
   pixel: { X: '■', O: '□' },
 }
-
-const DESKTOP_XO = { X: '✕', O: '○' }
+const DESKTOP_OUTLINED_GLYPH = { oo: '◉', pixel: '▣' }
 
 export function pieceGlyphs(style, desktop) {
-  return desktop && style === 'xo' ? DESKTOP_XO : GLYPHS[style] ?? GLYPHS.xo
+  const glyphs = GLYPHS[style] ?? GLYPHS.xo
+  const outlined = desktop && DESKTOP_OUTLINED_GLYPH[style]
+  return outlined ? { ...glyphs, O: outlined } : glyphs
 }
 
 export function boardProps(room, view, enabled, columns, lines, { board: style, pieces }, desktop = false) {
@@ -34,25 +47,35 @@ export function boardProps(room, view, enabled, columns, lines, { board: style, 
   const rulers = columns >= 48
   const boardHeight = area.maxY - area.minY + 1
   const grid = style === 'grid'
-  const cellWidth = grid ? (desktop ? DESKTOP_GRID.cellWidth : GRID_CELL_WIDTH) : 2
+  const cellWidth = desktop ? DESKTOP_GRID.cellWidth : grid ? GRID_CELL_WIDTH : 2
   const cellHeight = grid && !desktop ? 2 : 1
-  const fullHeight = boardHeight * cellHeight + Number(grid) + Number(rulers)
-  const cropped = fullHeight > lines || width * cellWidth + (rulers ? 4 : 0) + Number(grid) > columns
+  const geometry = { ...area, width, desktop, style, cellWidth, cellHeight, rulers, columns, lines }
+  const visible = viewportSize(geometry)
   return {
-    ...area, width, cells: cells.join(''), pending: pending ? { x: pending.x, y: pending.y, mark: room.mark } : null,
+    ...geometry, cells: cells.join(''), pending: pending ? { x: pending.x, y: pending.y, mark: room.mark } : null,
     last: last ?? null, win: room.winLine ?? [], gameId: room.gameId,
-    view, enabled, columns, lines: Math.min(lines, fullHeight), rulers, cropped,
-    style, pieces, desktop, cellWidth, cellHeight, first: room.moves.length === 0, boardVersion: room.boardVersion, moveEpoch: room.moveEpoch ?? 0,
+    view, enabled, lines: visible.height * cellHeight + Number(grid) + Number(rulers),
+    cropped: visible.width < width || visible.height < boardHeight,
+    pieces, first: room.moves.length === 0, boardVersion: room.boardVersion, moveEpoch: room.moveEpoch ?? 0,
   }
 }
 
-export function boardLayout(props, saved) {
+function viewportSize(props) {
   const grid = props.style === 'grid'
   const ruler = props.rulers ? 4 : 0
   const { cellWidth, cellHeight, desktop } = props
-  const width = clamp(Math.floor((props.columns - ruler - Number(grid)) / cellWidth), 1, props.width)
+  const maxWidth = desktop ? Math.min(props.width, DESKTOP_VIEW_COLUMNS) : props.width
+  const width = clamp(Math.floor((props.columns - ruler - Number(grid)) / cellWidth), 1, maxWidth)
+  const boardHeight = props.maxY - props.minY + 1
+  const maxHeight = desktop ? Math.min(boardHeight, Math.floor(DESKTOP_VIEW_CELLS / width)) : boardHeight
   const height = clamp(Math.floor((props.lines - Number(props.rulers) - Number(grid)) / cellHeight),
-    1, props.maxY - props.minY + 1)
+    1, maxHeight)
+  return { grid, ruler, width, height }
+}
+
+export function boardLayout(props, saved) {
+  const { grid, ruler, width, height } = viewportSize(props)
+  const { cellWidth, cellHeight, desktop } = props
   const drawnWidth = width * cellWidth + Number(grid) + ruler
   const offset = Math.max(0, Math.floor((props.columns - drawnWidth) / 2))
   const center = props.last ?? { x: 0, y: 0 }
@@ -75,17 +98,23 @@ export function boardLayout(props, saved) {
   return { grid, desktop, ruler, width, height, drawnWidth, offset, view, fit, cellWidth, cellHeight }
 }
 
-export function pointerCell(layout, rulers, { x, y, fine }) {
+export function pointerCell(layout, rulers, { x, y, fine }, rejectAmbiguous = true) {
   const column = (fine?.x ?? Math.floor(x)) - layout.offset - layout.ruler
-  const row = Math.floor(y) - Number(rulers)
-  const border = Number(layout.grid)
+  const row = (fine?.y ?? Math.floor(y)) - Number(rulers)
+  const border = Number(layout.grid && !layout.desktop)
   if (column < 0 || row < 0 || column >= layout.width * layout.cellWidth + border ||
-      row >= layout.height * layout.cellHeight + border ||
-      (layout.desktop && column > Math.floor(layout.width * layout.cellWidth))) return null
-  // Desktop reports whole UI columns. Assign a column touched by a divider to the cell on its right.
-  const cellX = layout.desktop && layout.grid && !fine
-    ? Math.ceil((column + 1) / layout.cellWidth) - 1
-    : Math.floor(column / layout.cellWidth)
+      row >= layout.height * layout.cellHeight + border) return null
+  let cellX = Math.floor(column / layout.cellWidth)
+  if (layout.desktop && fine?.x == null) {
+    // A whole-column event can overlap the painted edges of two tiles. Ignore
+    // that input so releasing close to a shared edge cannot place the wrong piece.
+    const inset = (layout.cellWidth - DESKTOP_GRID.tileWidth) / 2
+    const first = Math.max(0, Math.floor((column + inset) / layout.cellWidth))
+    const last = Math.min(layout.width - 1, Math.ceil((column + 1 - inset) / layout.cellWidth) - 1)
+    if (first === last) cellX = first
+    else if (rejectAmbiguous) return null
+    else cellX = Math.floor((column + 0.5) / layout.cellWidth)
+  }
   return {
     x: layout.view.left + Math.min(layout.width - 1, cellX),
     y: layout.view.top + Math.min(layout.height - 1, Math.floor(row / layout.cellHeight)),

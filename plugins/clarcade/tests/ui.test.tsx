@@ -125,7 +125,8 @@ for (const surface of surfaces) {
     await ui.unmount()
     await $.command.run({ command: 'clarcade', args: '' })
     const reopened = await $.ui.mount(pane(surface))
-    expect(await reopened.find({ type: 'Text', text: /Move 1/ })).toBeTruthy()
+    expect(await reopened.find({ type: 'Text', text: /Opponent’s turn/ })).toBeTruthy()
+    expect(await reopened.find({ type: 'Text', text: /Click a cell|Move 1/ })).toBeUndefined()
     f.change({ ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' },
       boardVersion: 2, moves: [{ x: 0, y: 0, mark: 'X' }, { x: 0, y: 1, mark: 'O' }] })
     await f.clock.advance(3000)
@@ -240,6 +241,7 @@ for (const surface of surfaces) {
     await f.clock.advance(3000)
     expect(f.toasts).toHaveLength(0)
     await ui.pointer({ type: 'down', x: 20, y: surface === 'desktop' ? 7 : 8, button: 'left', in: 'board' })
+    await ui.pointer({ type: 'up', x: 20, y: surface === 'desktop' ? 7 : 8, button: 'left', in: 'board' })
     expect(f.requests.filter(call => call.path === '/move')).toHaveLength(1)
     await ui.key({ key: 'return', in: 'board' })
     expect(f.requests.filter(call => call.path === '/move')).toHaveLength(1)
@@ -328,17 +330,29 @@ for (const surface of surfaces) {
       f.change({ ...original, status: 'playing', connection: 'connected',
         guest: { playerId: 'guest', name: 'Binh' } })
       await f.clock.advance(3000)
-      const grid = surface === 'desktop' ? { type: 'Box' as const, key: 'grid-columns', in: 'board' }
+      const grid = surface === 'desktop' ? { type: 'Box' as const, key: 'board-grid', in: 'board' }
         : { type: 'Text' as const, text: /┌──┬/, in: 'board' }
       expect(await ui.find(grid)).toBeTruthy()
+      if (surface === 'desktop') {
+        const tile = await ui.find({ type: 'Box', key: 'grid-tile', in: 'board' })
+        expect(Number(tile?.props.width) * 8.8).toBe(16)
+        expect(Number(tile?.props.height) * 20).toBe(16)
+        expect(Math.round(2 * Number(tile?.props.marginX) * 8.8)).toBe(4)
+      }
       expect(Boolean(await ui.find({ type: 'Text', text: /More cells off-screen/ }))).toBe(surface === 'terminal')
       await ui.pointer({ type: 'down', x: 0, y: 0, button: 'left', in: 'board' })
+      await ui.pointer({ type: 'up', x: 0, y: 0, button: 'left', in: 'board' })
       expect(f.requests.filter(call => call.path === '/move')).toHaveLength(0)
       await ui.pointer({ type: 'down', ...(surface === 'desktop' ? desktopClick : terminalClick), button: 'left', in: 'board' })
+      await ui.pointer({ type: 'up', ...(surface === 'desktop' ? desktopClick : terminalClick), button: 'left', in: 'board' })
       expect(f.requests.filter(call => call.path === '/move').map(call => call.body)).toEqual([
         { gameId: 'game-1', moveNo: 1, moveEpoch: 0, x: 0, y: 0 },
       ])
-      expect(await ui.find({ type: 'Text', text: surface === 'desktop' ? '✕' : '[X]', in: 'board' })).toBeTruthy()
+      expect(await ui.find({ type: 'Text', text: surface === 'desktop' ? 'X' : 'X ', in: 'board' })).toBeTruthy()
+      if (surface === 'desktop') {
+        expect((await ui.find({ type: 'Text', text: 'X', in: 'board' }))?.props.size).toBe('heading')
+      }
+      expect(await ui.find({ type: 'Text', text: /\[X\]|✕/, in: 'board' })).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: /Last move|⌖/, in: 'board' })).toBeUndefined()
       expect(await ui.find({ type: 'Button', key: 'emote-nice' })).toBeUndefined()
       expect(await ui.find({ type: 'Button', key: 'drawReq' })).toBeTruthy()
@@ -354,18 +368,32 @@ for (const surface of surfaces) {
       expect(await ui.find({ type: 'Select', key: 'pieces' })).toBeUndefined()
       await ui.press({ key: 'toggle-advanced' })
       expect(await ui.find({ type: 'Input', key: 'node-path' })).toBeUndefined()
+      const pieces = await ui.find({ type: 'Select', key: 'pieces' })
+      expect(pieces?.props.options).toContainEqual({ value: 'xo', label: 'X / O' })
       await ui.press({ key: 'toggle-network' })
       expect(await ui.find({ type: 'Input', key: 'node-path' })).toBeTruthy()
       await ui.select({ key: 'pieces', value: 'oo' })
       await ui.press({ key: 'tab-game' })
-      expect(await ui.find({ type: 'Text', text: surface === 'desktop' ? '○' : '[○]', in: 'board' })).toBeTruthy()
+      const circle = await ui.find({ type: 'Text', text: surface === 'desktop' ? '◉' : '○ ', in: 'board' })
+      expect(circle).toBeTruthy()
+      if (surface === 'desktop') expect(circle?.props.size).toBe('title')
       await ui.press({ key: 'tab-settings' })
       await ui.select({ key: 'pieces', value: 'pixel' })
       await ui.select({ key: 'board', value: 'dots' })
       await ui.press({ key: 'tab-game' })
       expect(await ui.find(grid)).toBeUndefined()
-      expect(await ui.find({ type: 'Text', text: '■', in: 'board' })).toBeTruthy()
-      expect(await ui.find({ type: 'Text', text: '□', in: 'board' })).toBeTruthy()
+      if (surface === 'desktop') {
+        // Desktop draws pixel pieces as Boxes so they stay centred: a solid 12 px
+        // square for a played piece, a 10 px frame on the latest O's filled tile.
+        expect(await ui.find({ type: 'Text', text: /[■□▣]/, in: 'board' })).toBeUndefined()
+        const pieces = await ui.findAll({ type: 'Box', key: 'board-piece', in: 'board' })
+        expect(pieces.map(piece => Math.round(Number(piece.props.width) * 8.8)).sort()).toEqual([10, 12])
+        expect((await ui.find({ type: 'Box', key: 'board-last-move', in: 'board' }))?.props.backgroundColor)
+          .toBe('suggestion')
+      } else {
+        expect(await ui.find({ type: 'Text', text: '■', in: 'board' })).toBeTruthy()
+        expect(await ui.find({ type: 'Text', text: '□', in: 'board' })).toBeTruthy()
+      }
       expect(await ui.find({ type: 'Text', text: /More cells off-screen/ })).toBeUndefined()
       await ui.redraw(pane(surface, 24).props)
       expect(await ui.find({ type: 'Text', text: /More cells off-screen/ })).toBeTruthy()
@@ -373,6 +401,136 @@ for (const surface of surfaces) {
     })
   }
 }
+
+for (const surface of surfaces) {
+  test(`${surface}: dragging places one piece at release and dropping outside cancels`, async ($, on) => {
+    const f = fixture(on)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    await $.command.run({ command: 'clarcade', args: '' })
+    const ui = await $.ui.mount(pane(surface, 80))
+    await ui.input({ key: 'player-name', text: 'An' })
+    const room = { ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' },
+      boardVersion: 2, moves: [{ x: 0, y: 0, mark: 'X' }, { x: 1, y: 0, mark: 'O' }] }
+    f.change(room)
+    await f.clock.advance(3000)
+    const y = surface === 'desktop' ? 8 : 9
+    const dropX = surface === 'desktop' ? 45 : 47
+    const pointer = (type: 'down' | 'move' | 'up', x: number, row = y) =>
+      ui.pointer({ type, x, y: row, button: 'left', in: 'board' })
+    const moves = () => f.requests.filter(call => call.path === '/move').map(call => call.body)
+    await pointer('down', 38)
+    await pointer('move', dropX)
+    await ui.key({ key: 'return', in: 'board' })
+    expect(moves()).toHaveLength(0)
+    // The Desktop Client reserves a row below its 1px bottom stroke.
+    await pointer('up', dropX, surface === 'desktop' ? 16 : 80)
+    await pointer('up', dropX)
+    expect(moves()).toHaveLength(0)
+
+    await pointer('down', 38)
+    f.change({ ...room, moveEpoch: 1 })
+    await f.clock.advance(3000)
+    await pointer('up', dropX)
+    expect(moves()).toHaveLength(0)
+
+    await pointer('down', 38)
+    f.change({ ...room, moveEpoch: 1, connection: 'reconnecting' })
+    await f.clock.advance(3000)
+    f.change({ ...room, moveEpoch: 1 })
+    await f.clock.advance(3000)
+    await pointer('up', dropX)
+    expect(moves()).toHaveLength(0)
+
+    if (surface === 'desktop') {
+      await pointer('down', 38)
+      await pointer('up', 44)
+      expect(moves()).toHaveLength(0)
+    }
+    await pointer('down', surface === 'desktop' ? 44 : 38)
+    await pointer('move', dropX)
+    expect(moves()).toHaveLength(0)
+    await pointer('up', dropX)
+    expect(moves()).toEqual([{ gameId: 'game-1', moveNo: 3, moveEpoch: 1, x: 2, y: 0 }])
+    await ui.unmount()
+  })
+}
+
+test('Desktop marks only the latest move and keeps the same piece color with or without the cursor', async ($, on) => {
+  const f = fixture(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const ui = await $.ui.mount(pane('desktop', 80))
+  await ui.input({ key: 'player-name', text: 'An' })
+  f.change({ ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' },
+    boardVersion: 2, moves: [{ x: 0, y: 0, mark: 'X' }, { x: 1, y: 0, mark: 'O' }] })
+  await f.clock.advance(3000)
+  const cursor = { type: 'Box' as const, key: 'board-cursor-top-left', in: 'board' }
+  const frame = { type: 'Box' as const, key: 'board-cursor', in: 'board' }
+  const latest = { type: 'Box' as const, key: 'board-last-move', in: 'board' }
+  const corners = { type: 'Box' as const, key: 'board-cursor-corners', in: 'board' }
+  // X's Desktop color: darker orange in light mode, the brand orange in dark mode.
+  const xColor = 'light-dark(#a8481f, #d77757)'
+  expect((await ui.find(frame))?.props).toMatchObject({ left: 24, top: 8 })
+  expect(Math.round(Number((await ui.find(frame))?.props.width) * 8.8)).toBe(180)
+  expect((await ui.find(cursor))?.props.backgroundColor).toBe('text')
+  // The latest move is a solid 16 px tile in the mover's color, the piece in inverse text.
+  expect((await ui.find(latest))?.props.backgroundColor).toBe('suggestion')
+  expect(Math.round(Number((await ui.find(latest))?.props.width) * 8.8)).toBe(16)
+  expect((await ui.find({ type: 'Text', text: 'O', in: 'board' }))?.props.color).toBe('inverseText')
+  expect((await ui.find({ type: 'Text', text: 'X', in: 'board' }))?.props.color).toBe(xColor)
+  expect(await ui.find({ type: 'Box', key: 'board-last-move-marker', in: 'board' })).toBeUndefined()
+  expect(Math.round(Number((await ui.find(corners))?.props.width) * 8.8)).toBe(14)
+  expect(Math.round(Number((await ui.find(corners))?.props.height) * 20)).toBe(14)
+  await ui.pointer({ type: 'move', x: 44, y: 8, in: 'board' })
+  expect(Math.round(Number((await ui.find(frame))?.props.width) * 8.8)).toBe(200)
+  await ui.pointer({ type: 'move', x: 45, y: 8, in: 'board' })
+  expect(Math.round(Number((await ui.find(frame))?.props.width) * 8.8)).toBe(200)
+  expect(f.requests.filter(call => call.path === '/move')).toHaveLength(0)
+  await ui.key({ key: 'left', in: 'board' })
+  await ui.key({ key: 'left', in: 'board' })
+  expect(Math.round(Number((await ui.find(frame))?.props.width) * 8.8)).toBe(160)
+  expect((await ui.find(cursor))?.props.backgroundColor).toBe('text')
+  expect((await ui.find({ type: 'Text', text: 'X', in: 'board' }))?.props.color).toBe(xColor)
+  f.change({ ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' },
+    turn: 'O', boardVersion: 3, moves: [{ x: 0, y: 0, mark: 'X' }, { x: 1, y: 0, mark: 'O' }, { x: 2, y: 0, mark: 'X' }] })
+  await f.clock.advance(3000)
+  expect(await ui.find(cursor)).toBeUndefined()
+  expect(await ui.findAll(latest)).toHaveLength(1)
+  expect((await ui.find(latest))?.props.backgroundColor).toBe(xColor)
+  const xs = await ui.findAll({ type: 'Text', text: 'X', in: 'board' })
+  expect(xs.map(x => x.props.color).sort()).toEqual(['inverseText', xColor].sort())
+  await ui.unmount()
+})
+
+test('Desktop renders a dense legacy viewport within the Client budget and can pan to the far edge', async ($, on) => {
+  const f = fixture(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const wide = pane('desktop', 180)
+  wide.props.scroll.bodyRows = 42
+  const ui = await $.ui.mount(wide)
+  await ui.input({ key: 'player-name', text: 'An' })
+  const moves = Array.from({ length: 384 }, (_, index) => ({
+    x: index % 24 - 12, y: Math.floor(index / 24) - 8, mark: index % 2 ? 'O' : 'X',
+  }))
+  // Center the dense section; put another piece beyond the initial viewport.
+  const last = moves.splice(204, 1)[0]
+  moves.push({ x: 100, y: 0, mark: 'O' }, last)
+  f.change({ ...original, status: 'playing', connection: 'connected', guest: { playerId: 'guest', name: 'Binh' },
+    boardSize: 201, boardVersion: moves.length, moves })
+  await f.clock.advance(3000)
+  expect(JSON.stringify(await ui.drawn({ in: 'board' })).length).toBeLessThan(100000)
+  expect(await ui.find({ type: 'Text', text: /More cells off-screen/ })).toBeTruthy()
+  await ui.press({ key: 'tab-settings' })
+  await ui.press({ key: 'toggle-advanced' })
+  await ui.select({ key: 'board', value: 'dots' })
+  await ui.press({ key: 'tab-game' })
+  expect(JSON.stringify(await ui.drawn({ in: 'board' })).length).toBeLessThan(100000)
+  for (let step = 0; step < 20; step++) await ui.key({ key: 'right', shift: true, in: 'board' })
+  expect(await ui.find({ type: 'Text', text: '100', in: 'board' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: 'O', in: 'board' })).toBeTruthy()
+  await ui.unmount()
+})
 
 test('Desktop widget restores an existing room after reload without opening a board', async ($, on) => {
   const f = fixture(on)
