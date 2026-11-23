@@ -5,7 +5,9 @@
 // `api` is the capability object register.tsx builds from `$`.
 
 const TIMEOUT_MS = 120000
-export const AUTO_UPDATE_EVERY_MS = 24 * 60 * 60 * 1000
+// Every new session checks, but not again within this long: each thread is a
+// session, and the CLI clones the marketplace each time it runs.
+export const AUTO_UPDATE_EVERY_MS = 10 * 60 * 1000
 const trim = path => typeof path === 'string' ? path.replace(/\/+$/, '') : ''
 
 export async function configRoot(api) {
@@ -102,7 +104,7 @@ export async function updatePlugin(api) {
     : { status: 'updated', from: install.version, to: version }
 }
 
-// At most once a day, and never while a game is on or when the person turned
+// Once per session start, at most every AUTO_UPDATE_EVERY_MS, and never while a game is on or when the person turned
 // nonessential traffic off. The time is claimed before the CLI runs, so a
 // second thread that starts meanwhile skips its turn.
 export async function autoUpdate(api, { busy }) {

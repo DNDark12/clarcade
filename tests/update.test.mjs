@@ -83,21 +83,21 @@ test('a project install is updated from its own project folder', async () => {
   assert.deepEqual(cli[1].argv.slice(-2), ['--scope', 'project'])
 })
 
-test('the automatic update runs once a day, claims the time first, and skips a game or disabled traffic', async () => {
-  const day = AUTO_UPDATE_EVERY_MS
-  const fresh = fakeApi({ now: 10 * day })
+test('the automatic update runs on each session start, skips one soon after the last check, claims the time first, and skips a game or disabled traffic', async () => {
+  const interval = AUTO_UPDATE_EVERY_MS
+  const fresh = fakeApi({ now: 10 * interval })
   assert.equal((await autoUpdate(fresh.api, { busy: () => false }))?.status, 'current')
-  assert.deepEqual(fresh.state.store.update, { checkedAt: 10 * day })
+  assert.deepEqual(fresh.state.store.update, { checkedAt: 10 * interval })
 
-  const recent = fakeApi({ now: 10 * day, store: { update: { checkedAt: 10 * day - day + 1 } } })
+  const recent = fakeApi({ now: 10 * interval, store: { update: { checkedAt: 10 * interval - interval + 1 } } })
   assert.equal(await autoUpdate(recent.api, { busy: () => false }), null)
   assert.deepEqual(cliCalls(recent.calls), [])
 
-  const playing = fakeApi({ now: 10 * day })
+  const playing = fakeApi({ now: 10 * interval })
   assert.equal(await autoUpdate(playing.api, { busy: () => true }), null)
   assert.equal(playing.state.store.update, undefined)
 
-  const quiet = fakeApi({ now: 10 * day, env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } })
+  const quiet = fakeApi({ now: 10 * interval, env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } })
   assert.equal(await autoUpdate(quiet.api, { busy: () => false }), null)
   assert.deepEqual(cliCalls(quiet.calls), [])
 })

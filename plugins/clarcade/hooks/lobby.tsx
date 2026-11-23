@@ -98,10 +98,50 @@ export function lobby(elements, event, ui, actions, t) {
   }
 
   function home() {
-    return [actionRow([
-      button('tab-host', t.create, () => actions.tab('host'), true),
-      button('tab-join', t.join, () => actions.tab('join')),
-    ])]
+    // Rooms on the LAN are found automatically while Home is open; waiting ones join in one press.
+    const waiting = (ui.rooms ?? []).filter(item => item.status === 'waiting')
+    return [
+      actionRow([
+        button('tab-host', t.create, () => actions.tab('host'), true),
+        button('tab-join', t.join, () => actions.tab('join')),
+      ]),
+      waiting.length > 0 && column([
+        text(t.nearbyRooms.replace('{count}', String(waiting.length)), { bold: true }),
+        ...roomRows(waiting.slice(0, 3)),
+      ], 'xs'),
+    ]
+  }
+
+  // One row per room: name, host, rules, and your record against that host when you have one.
+  function roomRows(rooms) {
+    return rooms.map(item => {
+      const record = recordAgainst(item.hostName)
+      const label = [item.roomName, item.hostName, ruleText(item.ruleset, t),
+        item.visibility === 'private' && t.private, record].filter(Boolean).join(' · ')
+      return item.status === 'waiting' ? button(`join-${item.roomCode}-${item.address}-${item.port}`, label,
+        () => actions.join(roomLinks(item.roomCode, item.address, item.port).directLink)) :
+        text(`${label} · ${item.status === 'playing' ? t.roomPlaying : t.roomFinished}`, { dimColor: true })
+    })
+  }
+
+  // Discovery names the host, not their player ID, so the record shows only
+  // when exactly one opponent in your statistics has that name.
+  function recordAgainst(hostName) {
+    const name = String(hostName ?? '').trim().toLowerCase()
+    const matches = (ui.stats?.opponents ?? []).filter(opponent =>
+      String(opponent.name ?? '').trim().toLowerCase() === name)
+    if (matches.length !== 1) return matches.length ? null : t.newOpponent
+    const { wins = 0, losses = 0, draws = 0 } = matches[0]
+    return (draws ? t.recordWithDraws : t.record).replace('{wins}', String(wins))
+      .replace('{losses}', String(losses)).replace('{draws}', String(draws))
+  }
+
+  function scanStatus() {
+    if (ui.scanning && (ui.scanRequested || !ui.roomsAt)) return t.scanning
+    if (!ui.roomsAt) return t.scanAuto
+    const at = new Date(ui.roomsAt)
+    const time = [at.getHours(), at.getMinutes(), at.getSeconds()].map(part => String(part).padStart(2, '0')).join(':')
+    return t.scannedAt.replace('{time}', time).replace('{count}', String(ui.rooms?.length ?? 0))
   }
 
   function playerBar() {
@@ -165,18 +205,22 @@ export function lobby(elements, event, ui, actions, t) {
       button('back-to-rooms', t.backToRooms, () => actions.tab('join')),
       input('join-pin', t.pin, ui.joinPin, edit('joinPin'), actions.submitPin, t.join),
     ]
-    const empty = ui.rooms === null ? t.loading : ui.discoveryName ? t.noNamedRooms : t.noPublicRooms
+    const empty = ui.rooms === null ? t.scanning : ui.discoveryName ? t.noNamedRooms : t.noPublicRooms
+    // Waiting rooms first, then the ones already playing.
+    const rooms = [...(ui.rooms ?? [])].sort((a, b) => Number(b.status === 'waiting') - Number(a.status === 'waiting'))
     return [
       input('join-target', t.roomOrLink, ui.joinDraft, edit('joinDraft'), actions.findTarget, t.findOrJoin),
       ui.discoveryName && button('back-to-rooms', t.showPublicRooms, () => actions.tab('join')),
+      column([
+        actionRow([
+          text(ui.discoveryName ? t.namedRooms : t.lanRooms, { bold: true }),
+          button('scan-rooms', t.scanRooms, () => actions.scan()),
+        ]),
+        text(scanStatus(), { dimColor: true }),
+      ], 'xs'),
       ui.roomSearchError ? notice(ui.roomSearchError, 'error') :
-        ui.rooms?.length ? column(ui.rooms.map(item => {
-          const label = [item.roomName, item.hostName, ruleText(item.ruleset, t),
-            item.visibility === 'private' && t.private].filter(Boolean).join(' · ')
-          return item.status === 'waiting' ? button(`join-${item.roomCode}-${item.address}-${item.port}`, label,
-            () => actions.join(roomLinks(item.roomCode, item.address, item.port).directLink)) :
-            text(`${label} · ${t.full}`, { dimColor: true })
-        }), 'xs') : text(empty, { dimColor: true }),
+        rooms.length ? column(roomRows(rooms), 'xs') : text(empty, { dimColor: true }),
+      !ui.discoveryName && text(t.privateHidden, { dimColor: true }),
     ]
   }
 

@@ -48,7 +48,7 @@ After installation, start a new Claude Code session and run `/clarcade`. The fir
 
 ### Updates
 
-Clarcade updates itself. About a minute after a session starts, at most once a day, it refreshes its marketplace and installs a newer version with the Claude Code CLI, the same two commands as below. It skips the check while a game is being played and when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. When a new version is installed, a toast asks you to restart Claude Code to load it.
+Clarcade updates itself. A few seconds after each Claude Code session starts (skipping a session within 10 minutes of the last check), it refreshes its marketplace and installs a newer version with the Claude Code CLI, the same two commands as below. It skips the check while a game is being played and when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. When a new version is installed, a toast asks you to restart Claude Code to load it.
 
 Turn this off in **Settings → Update automatically**, or update at once with **Update now** or `/clarcade update`. If your installed version does not offer these options, run both commands in a terminal:
 
@@ -98,6 +98,16 @@ Chat only shows the board in a reply from Claude, so there is no menu button tha
 3. If the board in the old message does not respond, send `Open Clarcade` again in the same chat.
 
 The game itself runs in a background process, not in the chat. Closing the chat or Claude Desktop does not end it while the host keeps the room open.
+
+### Updates
+
+From version 0.1.3 the extension updates itself. Each time Claude Desktop starts it, it looks for a newer release on GitHub a few seconds later (skipping a start within 10 minutes of the last check), checks the download against the SHA-256 digest GitHub publishes for it, and unpacks it into its data folder. The new version runs the next time Claude Desktop starts the extension, so a game in progress is not interrupted. Restart Claude Desktop to switch at once.
+
+- To turn this off, open **Settings → Extensions → Clarcade** and turn off **Update automatically**.
+- Updates come only from releases of this repository. Your name and game data are never sent.
+- Installing a newer `.mcpb` by hand still works, and the newer of the two copies runs.
+
+One manual step is left: if you have 0.1.2 or the 0.1.1 preview, install 0.1.3 by hand once. For 0.1.1, uninstall **Clarcade Chat Preview** first.
 
 ### Data and uninstalling
 
@@ -225,7 +235,10 @@ claude plugin test plugins/clarcade
 | `plugins/clarcade/hooks/` | The mod: command, pane, prompt band, settings and the client for the background process |
 | `plugins/clarcade/helper/` | The background process: rooms, LAN protocol, discovery and statistics |
 | `plugins/clarcade/games/gomoku/` | Rules and board rendering |
+| `plugins/clarcade-chat/` | The Claude Desktop extension for Chat: launcher with self-update (`bootstrap.mjs`), MCP server and board |
 | `tests/` | Node tests for the rules, protocol and background process |
+
+To release the Chat extension, build it with `sh plugins/clarcade-chat/pack.sh /absolute/path/clarcade-chat-<version>.mcpb`, tag the commit `clarcade-chat-v<version>` and publish a GitHub release with that file attached under exactly that name. Installed extensions pick up only releases that follow this pattern and are neither drafts nor pre-releases.
 
 ## License
 

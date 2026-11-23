@@ -15,7 +15,7 @@ trap 'rm -rf "$stage"' EXIT
 code_plugin="$source_dir/../clarcade"
 mkdir -p "$stage/server" "$stage/clarcade/.claude-plugin" "$stage/clarcade/hooks" "$stage/clarcade/games/gomoku"
 cp "$source_dir/manifest.json" "$stage/"
-cp "$source_dir/server.mjs" "$source_dir/board.html" "$stage/server/"
+cp "$source_dir/bootstrap.mjs" "$source_dir/server.mjs" "$source_dir/board.html" "$stage/server/"
 cp "$code_plugin/package.json" "$stage/clarcade/"
 cp "$code_plugin/.claude-plugin/plugin.json" "$stage/clarcade/.claude-plugin/"
 cp -R "$code_plugin/helper" "$stage/clarcade/"

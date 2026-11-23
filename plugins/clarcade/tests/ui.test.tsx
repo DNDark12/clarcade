@@ -24,7 +24,7 @@ const pane = (surface: 'terminal' | 'desktop' | 'mobile' | 'vscode', columns = 4
   },
 })
 
-function fixture(on, { privateRoom = false, publicRoom = false, waitForStats = async () => {} } = {}) {
+function fixture(on, { privateRoom = false, publicRoom = false, waitForStats = async () => {}, opponents = [] } = {}) {
   const store = mock.store(on)
   const clock = mock.clock(on)
   let room = null
@@ -82,7 +82,7 @@ function fixture(on, { privateRoom = false, publicRoom = false, waitForStats = a
     }
     if (path === '/stats') {
       await waitForStats()
-      reply = { total: { played: 2, wins: 1, losses: 1, draws: 0 }, opponents: [] }
+      reply = { total: { played: 2, wins: 1, losses: 1, draws: 0 }, opponents }
     }
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(reply) } }
   })
@@ -600,5 +600,43 @@ test('unknown userConfig choices fall back to the defaults', {
   // Automatic updates default to on, with a button to update at once.
   expect((await ui.find({ type: 'Select', key: 'autoUpdate' }))?.props.value).toBe('true')
   expect(await ui.find({ type: 'Button', key: 'update-now' })).toBeTruthy()
+  await ui.unmount()
+})
+
+// Rooms on the LAN appear by themselves on Home and Join, with your record
+// against each host; Scan LAN looks again at once.
+test('Home and Join list LAN rooms automatically, with a scan button and the record against the host', async ($, on) => {
+  const f = fixture(on, { publicRoom: true,
+    opponents: [{ playerId: 'p-an', name: 'An', played: 5, wins: 3, losses: 2, draws: 0 }] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const ui = await $.ui.mount(pane('terminal', 80))
+  await ui.input({ key: 'player-name', text: 'Binh' })
+  await f.clock.advance(4000)
+  const key = 'join-K7M2QX-192.168.0.20-49000'
+  expect(await ui.find({ type: 'Text', text: /1 room\(s\) waiting on your LAN/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key, text: /QA game · An · .* · you 3W 2L/ })).toBeTruthy()
+
+  await ui.press({ key: 'tab-join' })
+  expect(await ui.find({ type: 'Text', text: 'Rooms on your LAN' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /Updated \d\d:\d\d:\d\d · 1 found/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /Private rooms do not appear here/ })).toBeTruthy()
+  const scans = () => f.requests.filter(call => call.path === '/rooms').length
+  const before = scans()
+  await ui.press({ key: 'scan-rooms' })
+  expect(scans()).toBe(before + 1)
+  expect(await ui.find({ type: 'Button', key, text: /you 3W 2L/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('a host you have never played is marked as a new opponent', async ($, on) => {
+  const f = fixture(on, { publicRoom: true })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'clarcade', args: '' })
+  const ui = await $.ui.mount(pane('terminal', 80))
+  await ui.input({ key: 'player-name', text: 'Binh' })
+  await ui.press({ key: 'tab-join' })
+  await f.clock.advance(3000)
+  expect(await ui.find({ type: 'Button', key: 'join-K7M2QX-192.168.0.20-49000', text: /new opponent/ })).toBeTruthy()
   await ui.unmount()
 })

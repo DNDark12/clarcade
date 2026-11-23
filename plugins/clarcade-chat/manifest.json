@@ -2,20 +2,40 @@
   "manifest_version": "0.3",
   "name": "clarcade-chat",
   "display_name": "Clarcade",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Play Caro (Gomoku) on your LAN inside a Claude Desktop chat. Join rooms hosted with Clarcade in Claude Code.",
-  "author": { "name": "DNDark" },
+  "author": {
+    "name": "DNDark"
+  },
   "license": "MIT",
   "server": {
     "type": "node",
-    "entry_point": "server/server.mjs",
+    "entry_point": "server/bootstrap.mjs",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/server.mjs"]
+      "args": [
+        "${__dirname}/server/bootstrap.mjs"
+      ],
+      "env": {
+        "CLARCADE_CHAT_AUTO_UPDATE": "${user_config.auto_update}"
+      }
     }
   },
   "compatibility": {
-    "platforms": ["darwin"],
-    "runtimes": { "node": ">=22.0.0" }
+    "platforms": [
+      "darwin"
+    ],
+    "runtimes": {
+      "node": ">=22.0.0"
+    }
+  },
+  "user_config": {
+    "auto_update": {
+      "type": "boolean",
+      "title": "Update automatically",
+      "description": "Each time Claude Desktop starts Clarcade, download a newer version from its GitHub releases. It runs the next time the extension starts.",
+      "default": true,
+      "required": false
+    }
   }
 }

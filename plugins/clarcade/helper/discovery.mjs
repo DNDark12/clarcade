@@ -107,6 +107,14 @@ export function advertise(options, roomInfo) {
   return () => { for (const socket of sockets) close(socket) }
 }
 
+// Wi-Fi drops broadcast and multicast frames, often the first one after a
+// quiet spell while the host's radio dozes, so one query was easy to lose: a
+// short link (code only) then found nothing although the host was up. The query
+// goes out again at each of these offsets, with one nonce, and replies are
+// gathered until DISCOVERY_WINDOW_MS.
+export const DISCOVERY_SENDS_MS = [0, 250, 600]
+export const DISCOVERY_WINDOW_MS = 1200
+
 export function discover(options, selector = {}, knownAddress) {
   const { udpPort, loopback } = options
   return new Promise(resolve => {
@@ -115,12 +123,14 @@ export function discover(options, selector = {}, knownAddress) {
     const nonce = randomBytes(16).toString('hex')
     const rooms = new Map()
     const start = Date.now()
-    const timer = setTimeout(finish, 450)
+    const timer = setTimeout(finish, DISCOVERY_WINDOW_MS)
+    const resends = []
     let finished = false
     function finish() {
       if (finished) return
       finished = true
       clearTimeout(timer)
+      for (const resend of resends) clearTimeout(resend)
       close(socket)
       resolve([...rooms.values()])
     }
@@ -142,21 +152,31 @@ export function discover(options, selector = {}, knownAddress) {
     })
     socket.bind(0, ipv6 ? '::' : loopback ? '127.0.0.1' : '0.0.0.0', () => {
       const query = encode({ type: 'discover', nonce, ...selector })
-      if (loopback || ipv6) {
-        socket.send(query, udpPort, loopback ? '127.0.0.1' : knownAddress, () => {})
-        return
-      }
-      try {
-        if (knownAddress && allowedAddress(knownAddress, options)) {
-          socket.send(query, udpPort, knownAddress, () => {})
+      if (!loopback && !ipv6) {
+        try {
+          socket.setMulticastTTL(1)
+          socket.setBroadcast(true)
+        } catch (error) {
+          console.error('[clarcade] discovery query:', error.message)
         }
-        socket.setMulticastTTL(1)
-        socket.send(query, udpPort, GROUP, () => {})
-        socket.setBroadcast(true)
-        socket.send(query, udpPort, BROADCAST, () => {})
-      } catch (error) {
-        console.error('[clarcade] discovery query:', error.message)
       }
+      const ask = () => {
+        if (finished) return
+        if (loopback || ipv6) {
+          socket.send(query, udpPort, loopback ? '127.0.0.1' : knownAddress, () => {})
+          return
+        }
+        try {
+          if (knownAddress && allowedAddress(knownAddress, options)) {
+            socket.send(query, udpPort, knownAddress, () => {})
+          }
+          socket.send(query, udpPort, GROUP, () => {})
+          socket.send(query, udpPort, BROADCAST, () => {})
+        } catch (error) {
+          console.error('[clarcade] discovery query:', error.message)
+        }
+      }
+      for (const at of DISCOVERY_SENDS_MS) resends.push(setTimeout(ask, at))
     })
   })
 }

@@ -11,8 +11,8 @@ import { autoUpdate, updatePlugin } from './update.js'
 const PANE = 'clarcade'
 // The first automatic check waits until the session has settled, with some
 // spread so threads opened together do not all run the CLI at once.
-const AUTO_UPDATE_DELAY_MS = 30000
-const AUTO_UPDATE_SPREAD_MS = 60000
+const AUTO_UPDATE_DELAY_MS = 5000
+const AUTO_UPDATE_SPREAD_MS = 10000
 
 function updateText(result, t) {
   switch (result?.status) {
@@ -34,7 +34,7 @@ function createController(options) {
   const ui = {
     tab: 'home', settings: { language: 'en', playerName: '' },
     nameDraft: '', roomDraft: '', joinDraft: '', portDraft: '', nodeDraft: '',
-    room: null, rooms: null, roomSearchError: '', busy: false, notice: '', error: '',
+    room: null, rooms: null, roomsAt: null, scanning: false, scanRequested: false, roomSearchError: '', busy: false, notice: '', error: '',
     ...HOST_DEFAULTS, joinPin: '', pinLink: null, discoveryName: '', selectedOpponent: null,
     copyFallback: '', inviteAddress: '', confirm: null, view: null, advanced: false, network: false, firewallHelp: false,
     stats: null, headToHead: null, now: 0, surface: null, visible: false, helperDown: false, nodeMissing: false,
@@ -202,14 +202,21 @@ function createController(options) {
     if (!joinIfUnique && scanJob?.roomName === roomName && scanJob.promise) return scanJob.promise
     const scan: NonNullable<typeof scanJob> = { roomName }
     scanJob = scan
-    const active = () => scanJob === scan && ui.tab === 'join' && !ui.pinLink && !ui.room
+    const active = () => scanJob === scan && ['join', 'home'].includes(ui.tab) && !ui.pinLink && !ui.room
+    ui.scanning = true
+    // The automatic scan every few seconds stays quiet; only the first one and
+    // a scan the person asked for show that a scan is running.
+    if (ui.scanRequested || !ui.roomsAt) draw(api)
     scan.promise = (async () => {
       try {
         const query = roomName ? `?name=${encodeURIComponent(roomName)}` : ''
         const { rooms } = await fetch(api, `/rooms${query}`)
         if (!active()) return
         ui.rooms = rooms
+        ui.roomsAt = await api.clock.now()
         ui.roomSearchError = ''
+        // Your record against each host comes from your statistics.
+        if (rooms.length && !ui.stats) await updateStats(api)
         if (joinIfUnique && rooms.length === 1 && rooms[0].status === 'waiting') {
           const item = rooms[0]
           await join(api, roomLinks(item.roomCode, item.address, item.port).directLink)
@@ -219,7 +226,14 @@ function createController(options) {
         ui.roomSearchError = errorText(error.reason ?? 'daemon-unavailable', t())
       }
       draw(api)
-    })().finally(() => { if (scanJob === scan) scanJob = undefined })
+    })().finally(() => {
+      if (scanJob === scan) {
+        scanJob = undefined
+        ui.scanning = false
+        ui.scanRequested = false
+        draw(api)
+      }
+    })
     return scan.promise
   }
 
@@ -246,7 +260,9 @@ function createController(options) {
     const pane = panes?.find(item => item.id === PANE)
     const shown = pane ? pane.isShown : ui.visible
     if (shown || elapsed % 3 === 0) await refresh(api)
-    if (shown && ui.tab === 'join' && !ui.pinLink && !ui.room && !ui.busy && ++discoveryElapsed % 2 === 0) {
+    // Rooms are found automatically every few seconds while Home or Join is on screen.
+    if (shown && ['join', 'home'].includes(ui.tab) && ui.settings.playerName && !ui.pinLink && !ui.room && !ui.busy &&
+        ++discoveryElapsed % 2 === 0) {
       await discover(api)
     }
   }
@@ -386,6 +402,12 @@ function createController(options) {
         })
       },
       stats() { return updateStats(api) },
+      // A scan the person asked for starts afresh instead of joining one already running.
+      scan() {
+        scanJob = undefined
+        ui.scanRequested = true
+        return discover(api)
+      },
       update() {
         return run(api, async () => {
           ui.notice = updateText(await updatePlugin(api), t())

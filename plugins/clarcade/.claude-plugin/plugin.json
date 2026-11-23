@@ -1,7 +1,7 @@
 {
   "name": "clarcade",
   "displayName": "Clarcade",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Caro (Gomoku) for two players on your LAN while Claude Code works.",
   "author": {
     "name": "DNDark",
@@ -86,7 +86,7 @@
       "type": "boolean",
       "title": "Update automatically",
       "default": true,
-      "description": "Once a day, install a newer Clarcade from its marketplace when no game is being played. Restart to load it."
+      "description": "When a session starts, install a newer Clarcade from its marketplace unless a game is being played. Restart to load it."
     }
   }
 }
