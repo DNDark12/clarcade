@@ -316,6 +316,8 @@ export function lobby(elements, event, ui, actions, t) {
       picker('language', t.language, [['auto', t.system], ['en', 'English'], ['vi', 'Tiếng Việt']],
         current.preference, set('language')),
       picker('sounds', t.sounds, switchOptions, current.sounds, set('sounds')),
+      picker('autoUpdate', t.autoUpdate, switchOptions, current.autoUpdate, set('autoUpdate')),
+      button('update-now', t.updateNow, () => actions.update()),
       button('toggle-advanced', `${ui.advanced ? '▾' : '▸'} ${t.advanced}`, () => actions.edit('advanced', !ui.advanced)),
       ...(ui.advanced ? [
         picker('notifications', t.notifications, ['toast', 'sound', 'band', 'off'].map(value => [value, t[value]]),

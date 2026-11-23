@@ -1,7 +1,7 @@
 {
   "name": "clarcade",
   "displayName": "Clarcade",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Caro (Gomoku) for two players on your LAN while Claude Code works.",
   "author": {
     "name": "DNDark",
@@ -81,6 +81,12 @@
       "title": "Piece style",
       "default": "xo",
       "description": "xo, oo or pixel: draw pieces as X/O, circles or squares."
+    },
+    "autoUpdate": {
+      "type": "boolean",
+      "title": "Update automatically",
+      "default": true,
+      "description": "Once a day, install a newer Clarcade from its marketplace when no game is being played. Restart to load it."
     }
   }
 }

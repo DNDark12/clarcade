@@ -565,5 +565,8 @@ test('unknown userConfig choices fall back to the defaults', {
   await ui.press({ key: 'toggle-advanced' })
   expect((await ui.find({ type: 'Select', key: 'pieces' }))?.props.value).toBe('xo')
   expect((await ui.find({ type: 'Select', key: 'board' }))?.props.value).toBe('grid')
+  // Automatic updates default to on, with a button to update at once.
+  expect((await ui.find({ type: 'Select', key: 'autoUpdate' }))?.props.value).toBe('true')
+  expect(await ui.find({ type: 'Button', key: 'update-now' })).toBeTruthy()
   await ui.unmount()
 })

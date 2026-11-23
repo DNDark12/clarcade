@@ -45,6 +45,20 @@ claude plugin install clarcade@clarcade
 
 After installation, start a new Claude Code session and run `/clarcade`. The first time, the pane asks for your display name. That name is the only information about you sent over the network.
 
+### Updates
+
+Clarcade updates itself. About a minute after a session starts, at most once a day, it refreshes its marketplace and installs a newer version with the Claude Code CLI, the same two commands as below. It skips the check while a game is being played and when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. When a new version is installed, a toast asks you to restart Claude Code to load it.
+
+Turn this off in **Settings → Update automatically**, or update at once with **Update now** or `/clarcade update`. From a terminal:
+
+```sh
+claude plugin marketplace update clarcade
+```
+
+```sh
+claude plugin update clarcade@clarcade
+```
+
 ## How to play
 
 ### Create a room

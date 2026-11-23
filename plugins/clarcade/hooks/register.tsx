@@ -6,8 +6,25 @@ import { parseLink, roomLinks } from './link.js'
 import { lobby, roomStatus, scoreLine } from './lobby.tsx'
 import { statusColor } from './ui/tokens.ts'
 import { readSettings, saveSettings, validName } from './settings.ts'
+import { autoUpdate, updatePlugin } from './update.js'
 
 const PANE = 'clarcade'
+// The first automatic check waits until the session has settled, with some
+// spread so threads opened together do not all run the CLI at once.
+const AUTO_UPDATE_DELAY_MS = 30000
+const AUTO_UPDATE_SPREAD_MS = 60000
+
+function updateText(result, t) {
+  switch (result?.status) {
+    case 'not-installed': return t.updateNotInstalled
+    case 'no-cli': return t.updateNoCli.replace('{detail}', result.detail || '-')
+    case 'failed': return t.updateFailed.replace('{step}', result.step).replace('{code}', String(result.code))
+      .replace('{detail}', result.detail || '-')
+    case 'current': return t.updateCurrent.replace('{version}', result.version)
+    case 'updated': return t.updateDone.replace('{from}', result.from).replace('{to}', result.to)
+    default: return t.retry
+  }
+}
 const ART = { joined: 'turn', turn: 'turn', finished: 'win', rematch: 'turn' }
 const HOST_DEFAULTS = {
   holdMs: 1800000, ruleset: 'freestyle', visibility: 'public', turnMs: 0, hostPin: '', hostAdvanced: false,
@@ -354,6 +371,11 @@ function createController(options) {
         status(api)
         draw(api)
       },
+      update() {
+        return run(api, async () => {
+          ui.notice = updateText(await updatePlugin(api), t())
+        })
+      },
       async setting(key, value) {
         const patch = {}
         if (key === 'language') {
@@ -388,7 +410,15 @@ function createController(options) {
     }
   }
 
-  return { ui, t, draw, load, focus, refresh, tick, open, findTarget, invalid, actions, run, fetch, play }
+  // A daily check that installs a newer version by itself, unless the person
+  // turned it off or a game is being played.
+  async function automaticUpdate(api) {
+    if (ui.settings.autoUpdate === false) return
+    const result = await autoUpdate(api, { busy: () => ui.room?.status === 'playing' })
+    if (result?.status === 'updated') api.ui.toast(`Caro · ${updateText(result, t())}`)
+  }
+
+  return { ui, t, draw, load, focus, refresh, tick, open, findTarget, invalid, actions, run, fetch, play, automaticUpdate }
 }
 
 function capabilities($) {
@@ -396,17 +426,22 @@ function capabilities($) {
     plugin: { root: $.plugin.root },
     session: { id: () => $.session.id() },
     registerCommand: () => $.command.register({
-      name: 'clarcade', description: 'Open Clarcade or join with a Clarcade invitation',
-      argumentHint: 'join <link|room name>', immediate: true,
+      name: 'clarcade', description: 'Open Clarcade, join with a Clarcade invitation, or update Clarcade',
+      argumentHint: 'join <link|room name> | update', immediate: true,
     }),
     store: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) },
     process: { run: (argv, init) => $.process.run(argv, init) },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
+    // Reads for the updater: the installed plugins list and the CLI's path.
+    fs: { read: path => $.fs.read(path), stat: (path, init) => $.fs.stat(path, init) },
     env: {
       get(key) {
         if (key === 'CLAUDE_CONFIG_DIR') return $.env.get('CLAUDE_CONFIG_DIR')
         if (key === 'LC_ALL') return $.env.get('LC_ALL')
         if (key === 'LC_MESSAGES') return $.env.get('LC_MESSAGES')
+        if (key === 'HOME') return $.env.get('HOME')
+        if (key === 'CLAUDE_CODE_EXECPATH') return $.env.get('CLAUDE_CODE_EXECPATH')
+        if (key === 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC') return $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')
         return $.env.get('LANG')
       },
     },
@@ -429,9 +464,11 @@ function capabilities($) {
 
 export function register(on, options = {}) {
   const controller = createController(options)
-  const { ui, t, draw, load, focus, refresh, tick, open, findTarget, invalid, actions, run, fetch, play } = controller
+  const { ui, t, draw, load, focus, refresh, tick, open, findTarget, invalid, actions, run, fetch, play,
+    automaticUpdate } = controller
   let timer
   let booted
+  let updateScheduled = false
   let attached
   let resumeQueued = false
 
@@ -469,6 +506,12 @@ export function register(on, options = {}) {
     if (event.isInteractive !== false || event.surface === 'desktop') {
       await boot(capabilities($))
       watch(capabilities($))
+      if (!updateScheduled) {
+        updateScheduled = true
+        const api = capabilities($)
+        api.clock.after(AUTO_UPDATE_DELAY_MS + Math.floor(Math.random() * AUTO_UPDATE_SPREAD_MS),
+          () => { void automaticUpdate(api).catch(() => {}) })
+      }
     }
     return started
   })
@@ -488,6 +531,11 @@ export function register(on, options = {}) {
 
   on('command.run', { command: 'clarcade' }, async ($, event) => {
     const args = event.args.trim()
+    if (/^update$/i.test(args)) {
+      const api = capabilities($)
+      await load(api)
+      return { text: updateText(await updatePlugin(api), t()), isTextDisplayOnly: true }
+    }
     const match = /^join\s+(.+)$/i.exec(args)
     if (args && !match) return { text: t().useJoin, isTextDisplayOnly: true }
     const opened = await open(capabilities($))

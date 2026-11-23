@@ -32,6 +32,7 @@ export async function readSettings($, options) {
     pieces: choice('pieces', 'xo', ['xo', 'oo', 'pixel']),
     allowTailscale: value('allowTailscale', false),
     allowIpv6Ula: value('allowIpv6Ula', false),
+    autoUpdate: value('autoUpdate', true) !== false,
   }
 }
 
