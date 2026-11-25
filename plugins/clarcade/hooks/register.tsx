@@ -36,7 +36,7 @@ function createController(options) {
     nameDraft: '', roomDraft: '', joinDraft: '', portDraft: '', nodeDraft: '',
     room: null, rooms: null, roomsAt: null, scanning: false, scanRequested: false, roomSearchError: '', busy: false, notice: '', error: '',
     ...HOST_DEFAULTS, joinPin: '', pinLink: null, discoveryName: '', selectedOpponent: null,
-    copyFallback: '', inviteAddress: '', confirm: null, view: null, advanced: false, network: false, firewallHelp: false,
+    copyFallback: '', inviteAddress: null as string | null, confirm: null, view: null, advanced: false, network: false, firewallHelp: false,
     stats: null, now: 0, surface: null, visible: false, helperDown: false, nodeMissing: false,
   }
   let setup
@@ -113,7 +113,7 @@ function createController(options) {
           ui.tab = latest ? 'game' : 'home'
           ui.confirm = null
           ui.copyFallback = ''
-          ui.inviteAddress = ''
+          ui.inviteAddress = null
           ui.firewallHelp = false
           if (!latest) Object.assign(ui, HOST_DEFAULTS)
         }
@@ -534,18 +534,21 @@ export function register(on, options = {}) {
     })
   }
 
+  // Once per session, a little after it starts or Desktop attaches to it.
+  function scheduleUpdate(api) {
+    if (updateScheduled) return
+    updateScheduled = true
+    api.clock.after(AUTO_UPDATE_DELAY_MS + Math.floor(Math.random() * AUTO_UPDATE_SPREAD_MS),
+      () => { void automaticUpdate(api).catch(() => {}) })
+  }
+
   on('session.start', async ($, event, next) => {
     const started = await next(event)
     ui.surface = event.surface ?? ui.surface
     if (event.isInteractive !== false || event.surface === 'desktop') {
       await boot(capabilities($))
       watch(capabilities($))
-      if (!updateScheduled) {
-        updateScheduled = true
-        const api = capabilities($)
-        api.clock.after(AUTO_UPDATE_DELAY_MS + Math.floor(Math.random() * AUTO_UPDATE_SPREAD_MS),
-          () => { void automaticUpdate(api).catch(() => {}) })
-      }
+      scheduleUpdate(capabilities($))
     }
     return started
   })
@@ -558,6 +561,9 @@ export function register(on, options = {}) {
       await $.ui.status(undefined)
       await boot(capabilities($))
       watch(capabilities($))
+      // Desktop starts its sessions as SDK sessions, so the update check is
+      // scheduled here rather than at session.start.
+      scheduleUpdate(capabilities($))
     }
     if (event.surface === 'desktop' || event.surface === 'terminal') void focus(capabilities($))
     return result

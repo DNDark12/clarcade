@@ -12,8 +12,14 @@
   h1 { font-size: 19px; margin: 0; }
   form { display: grid; gap: 10px; margin-top: 14px; }
   label { display: grid; gap: 4px; }
-  button, input { font: inherit; }
-  input, .action { border: 1px solid var(--color-border-primary, GrayText); padding: 6px 8px; border-radius: 5px; }
+  button, input, select { font: inherit; }
+  input:not([type="checkbox"]), select, .action { border: 1px solid var(--color-border-primary, GrayText); padding: 6px 8px; border-radius: 5px; }
+  input, select { min-width: 0; }
+  .checkbox { display: flex; align-items: center; gap: 6px; }
+  button[aria-pressed="true"] { border-color: currentColor; font-weight: 700; }
+  #invitation { display: grid; gap: 8px; }
+  #invite-room, #copy-status, #share-pin { margin: 0; }
+  #invite-room { font-weight: 600; overflow-wrap: anywhere; }
   .action { cursor: pointer; }
   .action:disabled { cursor: default; }
   #score { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -38,12 +44,31 @@
 <body>
 <main>
   <header><h1>Clarcade</h1><button id="expand" type="button" class="action" data-i18n="expand" hidden>Expand</button></header>
+  <div class="actions" id="lobby-actions">
+    <button id="show-join" class="action" type="button" data-i18n="joinRoom" aria-pressed="true">Join room</button>
+    <button id="show-host" class="action" type="button" data-i18n="createRoom" aria-pressed="false">Create room</button>
+  </div>
   <form id="join">
     <label><span data-i18n="link">LAN invitation link</span> <input name="link" placeholder="clarcade://j/…" required maxlength="256" autocomplete="off"></label>
     <label><span data-i18n="name">Your name</span> <input name="name" required maxlength="48" autocomplete="nickname"></label>
     <label><span data-i18n="pin">Private room PIN</span> <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="off"></label>
     <button class="action" type="submit" data-i18n="join" disabled>Join</button>
   </form>
+  <form id="host" hidden>
+    <label><span data-i18n="name">Your name</span> <input name="name" required maxlength="48" autocomplete="nickname"></label>
+    <label><span data-i18n="roomName">Room name</span> <input name="roomName" required maxlength="48"></label>
+    <label class="checkbox"><input name="privateRoom" type="checkbox"> <span data-i18n="privateRoom">Private room</span></label>
+    <label id="host-pin" hidden><span data-i18n="pin">Private room PIN</span> <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="off" disabled></label>
+    <button class="action" type="submit" data-i18n="createRoom" disabled>Create room</button>
+  </form>
+  <section id="invitation" hidden>
+    <p id="invite-room"></p>
+    <label><span data-i18n="linkAddress">Link address</span> <select id="invite-address"></select></label>
+    <label><span data-i18n="link">LAN invitation link</span> <input id="invite-link" readonly></label>
+    <button id="copy-link" type="button" class="action" data-i18n="copyLink">Copy link</button>
+    <p id="copy-status" role="status" hidden></p>
+    <p id="share-pin" data-i18n="sharePin" hidden>Share the PIN separately.</p>
+  </section>
   <section id="game" hidden>
     <p id="score"></p>
     <div id="board" data-i18n-label="boardLabel" aria-label="Caro board"></div>
@@ -58,26 +83,32 @@
       <button id="resign" type="button" class="action" data-i18n="resign">Resign</button>
     </div>
     <p id="rematch-note" hidden></p>
-    <div class="actions">
-      <button id="rematch" type="button" class="action" data-i18n="rematch" hidden>Play again</button>
-      <button id="leave" type="button" class="action" data-i18n="leave">Leave</button>
-    </div>
   </section>
+  <div id="room-actions" class="actions" hidden>
+    <button id="rematch" type="button" class="action" data-i18n="rematch" hidden>Play again</button>
+    <button id="leave" type="button" class="action" data-i18n="leave">Leave</button>
+  </div>
   <p id="status" role="status">Connecting to Claude Desktop…</p>
   <p id="error" role="alert" hidden></p>
 </main>
 <script>
 const get = id => document.getElementById(id);
-const form = get('join'), board = get('board'), leave = get('leave'), rematch = get('rematch');
+const joinForm = get('join'), hostForm = get('host'), board = get('board'), leave = get('leave'), rematch = get('rematch');
+const addressField = get('invite-address'), linkField = get('invite-link'), hostPin = hostForm.elements.pin;
 const undo = get('undo'), draw = get('draw'), resign = get('resign');
 const requests = new Map();
 let sequence = 0, ready = false, stopped = false, timer, room, version, renderedGame, busy = false, polling = false;
 let actionRevision = 0;
+let lobby = 'join', inviteAddress, copyStatus;
 // The board follows the language Claude Desktop reports for its UI
 // (hostContext.locale), then the browser's; anything but Vietnamese is English.
 const words = {
   en: {
     expand: 'Expand', link: 'LAN invitation link', name: 'Your name', pin: 'Private room PIN', join: 'Join',
+    joinRoom: 'Join room', createRoom: 'Create room', roomName: 'Room name', privateRoom: 'Private room',
+    waiting: 'Waiting for the other player…', cancelRoom: 'Cancel room', linkAddress: 'Link address',
+    shortLink: 'Short link (LAN discovery)', copyLink: 'Copy link', copied: 'Link copied.',
+    copyManually: 'Link selected. Press Command+C to copy it.', sharePin: 'Share the PIN separately.',
     leave: 'Leave', rematch: 'Play again', rematchWaiting: 'Waiting for your opponent to play again…',
     rematchOffered: 'Your opponent wants to play again.', boardLabel: 'Caro board',
     requestUndo: 'Request undo', requestDraw: 'Offer a draw', resign: 'Resign', accept: 'Accept', decline: 'Decline',
@@ -87,8 +118,8 @@ const words = {
     reasons: { line: 'five in a row', resign: 'resignation', disconnected: 'disconnect', 'board-full': 'board full',
       timeout: 'time ran out', 'move-limit': 'move limit reached', 'draw-agreed': 'agreed draw' }, connecting: 'Connecting to Claude Desktop…',
     pasteLink: 'Paste the LAN invitation link from the host.',
-    unsupportedSize: 'This preview supports 15 × 15 rooms. Start a new game from Claude Code.',
-    score: (room, host, guest, mark, score) => [room, score ? `${host} ${score.opponent}–${score.you} ${guest}` : `${host} / ${guest}`,
+    unsupportedSize: 'This board supports 15 × 15 rooms. Create a new room to play.',
+    score: (room, host, guest, mark, score) => [room, score ? `${host} ${score.host}–${score.guest} ${guest}` : `${host} / ${guest}`,
       score?.draws && (score.draws === 1 ? '1 draw' : `${score.draws} draws`), `You play ${mark}`].filter(Boolean).join(' · '),
     draw: 'Draw', youWon: 'You won', opponentWon: 'Your opponent won', reconnecting: 'Reconnecting…',
     confirming: 'Confirming…', yourTurn: 'Your turn', theirTurn: "Opponent's turn",
@@ -98,10 +129,12 @@ const words = {
     errors: {
       'invalid-link': 'That LAN invitation link is not valid.',
       'invalid-name': 'That name is not valid.',
+      'invalid-room': 'Enter a room name with 1 to 32 characters.',
       'pin-required': 'This room needs a PIN.',
       'wrong-pin': 'The PIN is not correct.',
       'invalid-pin': 'The PIN has 4 to 6 digits.',
       'room-not-found': 'Room not found. Try a link that includes the LAN address.',
+      'room-code-ambiguous': 'More than one LAN address answered. Ask the host for a direct link.',
       'room-full': 'The room is full.',
       'room-active': 'You are already in a room.',
       'connect-timeout': 'Could not reach the host.',
@@ -122,6 +155,10 @@ const words = {
   },
   vi: {
     expand: 'Mở rộng', link: 'Link mời LAN', name: 'Tên người chơi', pin: 'PIN phòng riêng', join: 'Vào phòng',
+    joinRoom: 'Vào phòng', createRoom: 'Tạo phòng', roomName: 'Tên phòng', privateRoom: 'Phòng riêng',
+    waiting: 'Đang chờ đối thủ…', cancelRoom: 'Hủy phòng', linkAddress: 'Địa chỉ trong link',
+    shortLink: 'Link ngắn (dò qua LAN)', copyLink: 'Copy link', copied: 'Đã copy link.',
+    copyManually: 'Đã chọn link. Nhấn Command+C để sao chép.', sharePin: 'Gửi PIN riêng cho đối thủ.',
     leave: 'Rời phòng', rematch: 'Chơi lại', rematchWaiting: 'Đang chờ đối thủ đồng ý chơi lại…',
     rematchOffered: 'Đối thủ muốn chơi lại.', boardLabel: 'Bàn Caro',
     requestUndo: 'Xin đi lại', requestDraw: 'Xin hòa', resign: 'Đầu hàng', accept: 'Đồng ý', decline: 'Từ chối',
@@ -131,8 +168,8 @@ const words = {
     reasons: { line: 'năm quân liên tiếp', resign: 'đầu hàng', disconnected: 'mất kết nối', 'board-full': 'bàn đã đầy',
       timeout: 'hết giờ', 'move-limit': 'đạt giới hạn số nước', 'draw-agreed': 'hai bên đồng ý hòa' }, connecting: 'Đang kết nối Claude Desktop…',
     pasteLink: 'Dán link LAN từ người tạo phòng.',
-    unsupportedSize: 'Bản thử hỗ trợ phòng 15 × 15. Hãy tạo ván mới ở phía Code.',
-    score: (room, host, guest, mark, score) => [room, score ? `${host} ${score.opponent}–${score.you} ${guest}` : `${host} / ${guest}`,
+    unsupportedSize: 'Bàn này hỗ trợ phòng 15 × 15. Hãy tạo phòng mới để chơi.',
+    score: (room, host, guest, mark, score) => [room, score ? `${host} ${score.host}–${score.guest} ${guest}` : `${host} / ${guest}`,
       score?.draws && `${score.draws} hòa`, `Bạn cầm ${mark}`].filter(Boolean).join(' · '),
     draw: 'Hòa', youWon: 'Bạn thắng', opponentWon: 'Đối thủ thắng', reconnecting: 'Đang kết nối lại…',
     confirming: 'Đang xác nhận…', yourTurn: 'Đến lượt bạn', theirTurn: 'Đến lượt đối thủ',
@@ -142,10 +179,12 @@ const words = {
     errors: {
       'invalid-link': 'Link mời LAN không hợp lệ.',
       'invalid-name': 'Tên người chơi không hợp lệ.',
+      'invalid-room': 'Nhập tên phòng từ 1 đến 32 ký tự.',
       'pin-required': 'Phòng yêu cầu mã PIN.',
       'wrong-pin': 'Mã PIN không đúng.',
       'invalid-pin': 'Mã PIN phải có 4 đến 6 chữ số.',
       'room-not-found': 'Không tìm thấy phòng. Thử link có địa chỉ LAN.',
+      'room-code-ambiguous': 'Có nhiều địa chỉ LAN phản hồi. Hãy xin link trực tiếp từ người tạo phòng.',
       'room-full': 'Phòng đã đủ người.',
       'room-active': 'Bạn đã ở trong một phòng.',
       'connect-timeout': 'Không kết nối được máy host.',
@@ -207,20 +246,55 @@ async function tool(name, args = {}) {
 }
 function apply(data) {
   if (data.unchanged) return;
+  if (data.room?.gameId !== room?.gameId) {
+    inviteAddress = undefined;
+    copyStatus = null;
+  }
   room = data.room;
   version = data.version;
   render();
 }
+function renderCopyStatus() {
+  get('copy-status').hidden = !copyStatus;
+  get('copy-status').textContent = copyStatus ? t()[copyStatus] : '';
+}
+function renderInvitation() {
+  const direct = room.directLinks ?? [];
+  const chosen = inviteAddress === '' ? undefined : direct.find(item => item.address === inviteAddress) ?? direct[0];
+  addressField.replaceChildren(...direct.map(item => new Option(item.address, item.address)), new Option(t().shortLink, ''));
+  addressField.parentElement.hidden = !direct.length;
+  addressField.value = chosen?.address ?? '';
+  linkField.value = chosen?.link ?? room.link;
+  get('invite-room').textContent = room.roomName;
+  get('share-pin').hidden = room.visibility !== 'private';
+  renderCopyStatus();
+}
 function render() {
-  form.hidden = Boolean(room);
-  get('game').hidden = !room;
-  form.querySelector('button').disabled = !ready || busy;
+  const waiting = room?.role === 'host' && room.status === 'waiting';
+  get('lobby-actions').hidden = Boolean(room);
+  get('invitation').hidden = !waiting;
+  get('game').hidden = !room || waiting;
+  get('room-actions').hidden = !room;
+  for (const [mode, form] of [['join', joinForm], ['host', hostForm]]) {
+    form.hidden = Boolean(room) || lobby !== mode;
+    form.querySelector('button').disabled = !ready || busy;
+    const tab = get('show-' + mode);
+    tab.setAttribute('aria-pressed', String(lobby === mode));
+    tab.disabled = busy;
+  }
   leave.disabled = busy;
+  leave.textContent = waiting ? t().cancelRoom : t().leave;
+  rematch.hidden = true;
   rematch.disabled = busy;
   for (const button of [undo, draw, resign, get('offer-accept'), get('offer-decline')]) button.disabled = busy;
   if (!ready) return;
   if (!room) {
-    get('status').textContent = t().pasteLink;
+    get('status').textContent = lobby === 'join' ? t().pasteLink : '';
+    return;
+  }
+  if (waiting) {
+    renderInvitation();
+    get('status').textContent = t().waiting;
     return;
   }
   const size = room.boardSize;
@@ -260,7 +334,9 @@ function render() {
     cell.disabled = !canPlay || Boolean(mark);
   }
   // Host first, as on the Claude Code board; the score covers this room's games.
-  get('score').textContent = t().score(room.roomName, room.hostName, room.guestName, room.mark, room.score);
+  const score = room.score && { host: room.role === 'host' ? room.score.you : room.score.opponent,
+    guest: room.role === 'host' ? room.score.opponent : room.score.you, draws: room.score.draws };
+  get('score').textContent = t().score(room.roomName, room.hostName, room.guestName, room.mark, score);
   const text = t();
   const over = Boolean(room.finished)
   rematch.hidden = !over || room.rematchVoted || room.connection !== 'connected';
@@ -278,7 +354,7 @@ function render() {
   const secondsLeft = room.turnMs > 0 && room.turnEndsAt ? Math.max(0, Math.ceil((room.turnEndsAt - Date.now()) / 1000)) : null;
   const reason = room.reason && text.reasons[room.reason];
   get('status').textContent = room.finished
-    ? [room.finished.winner === null ? text.draw : room.won ? text.youWon : text.opponentWon, reason].filter(Boolean).join(' · ')
+    ? [room.finished.draw ? text.draw : room.won ? text.youWon : text.opponentWon, reason].filter(Boolean).join(' · ')
     : [room.connection !== 'connected' ? text.reconnecting
       : busy || room.pendingMove ? text.confirming
         : room.turn === room.mark ? text.yourTurn : text.theirTurn,
@@ -307,16 +383,55 @@ async function action(name, args) {
   busy = true;
   showError(null);
   render();
-  try { apply(await tool(name, args)); }
+  try { apply(await tool(name, args)); return true; }
   catch (error) { showError(error); }
   finally { busy = false; render(); schedule(); }
 }
-form.addEventListener('submit', event => {
+for (const mode of ['join', 'host']) {
+  get('show-' + mode).addEventListener('click', () => {
+    const current = lobby === 'join' ? joinForm : hostForm;
+    const next = mode === 'join' ? joinForm : hostForm;
+    if (!next.elements.name.value) next.elements.name.value = current.elements.name.value;
+    lobby = mode;
+    showError(null);
+    render();
+  });
+}
+hostForm.elements.privateRoom.addEventListener('change', () => {
+  const privateRoom = hostForm.elements.privateRoom.checked;
+  hostPin.required = privateRoom;
+  hostPin.disabled = !privateRoom;
+  get('host-pin').hidden = !privateRoom;
+  if (!privateRoom) hostPin.value = '';
+});
+hostForm.addEventListener('submit', async event => {
   event.preventDefault();
-  const values = new FormData(form);
+  const values = new FormData(hostForm);
+  const visibility = values.has('privateRoom') ? 'private' : 'public';
+  if (await action('host_room', { name: String(values.get('name')).trim(), roomName: String(values.get('roomName')).trim(),
+    visibility, ...(visibility === 'private' && { pin: values.get('pin') }) })) hostPin.value = '';
+});
+addressField.addEventListener('change', () => {
+  inviteAddress = addressField.value;
+  copyStatus = null;
+  renderInvitation();
+});
+get('copy-link').addEventListener('click', async () => {
+  const link = linkField.value;
+  let status = 'copied';
+  try { await navigator.clipboard.writeText(link); }
+  catch { status = 'copyManually'; }
+  if (room?.status !== 'waiting' || link !== linkField.value) return;
+  if (status === 'copyManually') { linkField.focus(); linkField.select(); }
+  copyStatus = status;
+  renderCopyStatus();
+});
+joinForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  const values = new FormData(joinForm);
   const pin = values.get('pin');
-  void action('join_room', { link: String(values.get('link')).trim(), name: String(values.get('name')).trim(),
-    ...(pin && { pin }) });
+  if (await action('join_room', { link: String(values.get('link')).trim(), name: String(values.get('name')).trim(),
+    ...(pin && { pin }) })) joinForm.elements.pin.value = '';
 });
 const gameAction = (name, extra = {}) => { if (room) void action('game_action', { gameId: room.gameId, action: name, ...extra }); };
 undo.addEventListener('click', () => gameAction('undoReq'));
@@ -364,7 +479,7 @@ window.addEventListener('message', event => {
 });
 async function start() {
   const result = await request('ui/initialize', {
-    protocolVersion: '2026-01-26', appInfo: { name: 'Clarcade', version: '0.1.5' },
+    protocolVersion: '2026-01-26', appInfo: { name: 'Clarcade', version: '__CLARCADE_CHAT_VERSION__' },
     appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
   });
   if (!result?.protocolVersion) throw new Error('daemon-unavailable');

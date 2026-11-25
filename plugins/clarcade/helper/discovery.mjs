@@ -38,13 +38,22 @@ export function allowedAddress(address, { loopback = false, allowTailscale = fal
     (allowTailscale && a === 100 && b >= 64 && b <= 127)
 }
 
+function lanInterfaces(options) {
+  return Object.values(networkInterfaces()).flat()
+    .filter(item => item && !item.internal && allowedAddress(item.address, options))
+}
+
 export function lanAddresses(options) {
   if (options.loopback) return ['127.0.0.1']
-  return [...new Set(Object.values(networkInterfaces()).flat()
-    .filter(item => item && !item.internal && allowedAddress(item.address, options))
-    .map(item => item.address))]
+  return [...new Set(lanInterfaces(options).map(item => item.address))]
     .sort((a, b) => Number(!allowedAddress(a)) - Number(!allowedAddress(b)) ||
       Number(a.startsWith('169.254.')) - Number(b.startsWith('169.254.')))
+}
+
+function subnetBroadcast({ address, netmask, cidr }) {
+  if (!(Number(cidr?.split('/')[1]) < 31)) return null
+  const mask = netmask.split('.').map(Number)
+  return address.split('.').map((part, index) => Number(part) | (255 ^ mask[index])).join('.')
 }
 
 function exactKeys(value, keys) {
@@ -152,12 +161,33 @@ export function discover(options, selector = {}, knownAddress) {
     })
     socket.bind(0, ipv6 ? '::' : loopback ? '127.0.0.1' : '0.0.0.0', () => {
       const query = encode({ type: 'discover', nonce, ...selector })
+      const interfaces = !loopback && !ipv6 ? lanInterfaces(options).filter(item => isIPv4(item.address)) : []
+      const broadcastTargets = new Set([BROADCAST, ...interfaces.map(subnetBroadcast).filter(Boolean)])
       if (!loopback && !ipv6) {
         try {
           socket.setMulticastTTL(1)
           socket.setBroadcast(true)
         } catch (error) {
           console.error('[clarcade] discovery query:', error.message)
+        }
+      }
+      let sendingMulticast = false
+      async function multicast() {
+        if (sendingMulticast) return
+        sendingMulticast = true
+        try {
+          for (const item of interfaces.length ? interfaces : [null]) {
+            if (finished) break
+            try {
+              if (item) socket.setMulticastInterface(item.address)
+              // Wait before changing the outgoing interface for the next datagram.
+              await new Promise(resolve => socket.send(query, udpPort, GROUP, resolve))
+            } catch (error) {
+              if (error.code !== 'EADDRNOTAVAIL') console.error('[clarcade] multicast query:', error.message)
+            }
+          }
+        } finally {
+          sendingMulticast = false
         }
       }
       const ask = () => {
@@ -170,8 +200,8 @@ export function discover(options, selector = {}, knownAddress) {
           if (knownAddress && allowedAddress(knownAddress, options)) {
             socket.send(query, udpPort, knownAddress, () => {})
           }
-          socket.send(query, udpPort, GROUP, () => {})
-          socket.send(query, udpPort, BROADCAST, () => {})
+          for (const target of broadcastTargets) socket.send(query, udpPort, target, () => {})
+          void multicast()
         } catch (error) {
           console.error('[clarcade] discovery query:', error.message)
         }

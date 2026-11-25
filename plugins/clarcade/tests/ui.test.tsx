@@ -37,7 +37,8 @@ function fixture(on, { privateRoom = false, publicRoom = false, waitForStats = a
   const change = (next, alerts = []) => { room = next; notifications = alerts; revision++ }
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'thread-a' }))
-  on('env.get', (_, e) => ({ value: e.name === 'LANG' ? 'en_US.UTF-8' : undefined }))
+  const envReads = []
+  on('env.get', (_, e) => { envReads.push(e.name); return { value: e.name === 'LANG' ? 'en_US.UTF-8' : undefined } })
   on('command.register', (_, e) => { registrations.push(e.name); return { value: { command: 'clarcade' } } })
   on('ui.open', (_, e) => { opens.push(e.id); return { value: { isPlaced: true } } })
   on('ui.close', () => ({ value: { isClosed: true } }))
@@ -86,7 +87,7 @@ function fixture(on, { privateRoom = false, publicRoom = false, waitForStats = a
     }
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(reply) } }
   })
-  return { clock, opens, requests, change, toasts, store, registrations }
+  return { clock, opens, requests, change, toasts, store, registrations, envReads }
 }
 
 test('desktop host shows the board and subsequent moves while stats are still loading', async ($, on) => {
@@ -142,8 +143,11 @@ for (const surface of surfaces) {
     expect(await ui.findAll({ type: 'Button', text: /Copy link/ })).toHaveLength(1)
     expect(await ui.find({ type: 'Select', key: 'invite-address' })).toBeUndefined()
     await ui.press({ key: 'copy-link' })
-    expect(await ui.find({ type: 'Text', text: invite })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: original.directLink })).toBeTruthy()
     await ui.press({ key: 'firewall-help' })
+    await ui.select({ key: 'invite-address', value: '' })
+    await ui.press({ key: 'copy-link' })
+    expect(await ui.find({ type: 'Text', text: invite })).toBeTruthy()
     await ui.select({ key: 'invite-address', value: '192.168.1.20' })
     expect(await ui.findAll({ type: 'Button', text: /Copy link/ })).toHaveLength(1)
     await ui.press({ key: 'copy-link' })
@@ -244,6 +248,11 @@ test('Desktop attachment boots an SDK session exactly once without opening a pan
   }
   expect(f.registrations).toEqual(['clarcade'])
   expect(f.opens).toHaveLength(0)
+  // Desktop's sessions start as SDK sessions, so attaching schedules the update check, once.
+  const checks = () => f.envReads.filter(name => name === 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC').length
+  expect(checks()).toBe(0)
+  await f.clock.advance(16000)
+  expect(checks()).toBe(1)
 })
 
 for (const surface of surfaces) {

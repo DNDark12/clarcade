@@ -294,9 +294,11 @@ export function lobby(elements, event, ui, actions, t) {
   }
 
   function inviteControls() {
-    const directLinks: { address: string; link: string }[] = room.directLinks ??
+    const directLinks: { address: string; link: string }[] = room.directLinks?.length ? room.directLinks :
       (room.address && room.directLink ? [{ address: room.address, link: room.directLink }] : [])
-    const link = directLinks.find(item => item.address === ui.inviteAddress)?.link ?? room.link
+    const direct = ui.inviteAddress === '' ? undefined :
+      directLinks.find(item => item.address === ui.inviteAddress) ?? directLinks[0]
+    const link = direct?.link ?? room.link
     return [
       actionRow([
         button('copy-link', t.copy, e => actions.copy(link, e.surface), true),
@@ -305,8 +307,8 @@ export function lobby(elements, event, ui, actions, t) {
       ]),
       ui.firewallHelp && column([
         directLinks.length > 0 && Select({
-          key: 'invite-address', label: t.inviteAddress, value: ui.inviteAddress,
-          options: [{ value: '', label: t.lanDiscovery }, ...directLinks.map(({ address }) => ({ value: address, label: address }))],
+          key: 'invite-address', label: t.inviteAddress, value: direct?.address ?? '',
+          options: [...directLinks.map(({ address }) => ({ value: address, label: address })), { value: '', label: t.lanDiscovery }],
           onSelect: edit('inviteAddress'),
         }),
         directLinks.length > 0 && text(t.directInvite, { dimColor: true }),

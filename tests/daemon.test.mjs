@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { createSocket } from 'node:dgram'
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, lstat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, lstat, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import { createConnection, createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { channel } from '../plugins/clarcade/helper/net.mjs'
 import { stateFrames } from '../plugins/clarcade/helper/protocol.mjs'
-import { join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { createInterface } from 'node:readline'
 
 const execute = promisify(execFile)
 const launcher = fileURLToPath(new URL('../plugins/clarcade/helper/launch.mjs', import.meta.url))
@@ -41,15 +42,16 @@ async function fixture(t) {
   })
   const port = await udpPort()
 
-  return name => {
+  return (name, discoveryPort = port) => {
     const data = join(directory, name)
     const socketPath = join(data, 'd.sock')
     return {
       data,
       socketPath,
-      async launch() {
+      port: discoveryPort,
+      async launch(entry = launcher) {
         const { stdout } = await execute(process.execPath, [
-          launcher, '--data-dir', data, '--udp-port', String(port), '--loopback',
+          entry, '--data-dir', data, '--udp-port', String(discoveryPort), '--loopback',
         ], { timeout: 8000 })
         const endpoint = JSON.parse(stdout)
         pids.add(endpoint.pid)
@@ -248,6 +250,182 @@ test('direct invites, focus, move replay and results survive a guest crash', { t
   assert.equal((await guest.request('/move', second)).status, 409)
   assert.equal((await host.request('/stats')).body.total.played, 1)
   assert.equal((await guest.request('/stats')).body.total.played, 1)
+})
+
+function chatClient(t, daemon) {
+  const server = spawn(process.execPath, [
+    '--import', 'data:text/javascript,' + encodeURIComponent(`process.execPath = ${JSON.stringify(join(daemon.data, 'Claude'))}`),
+    fileURLToPath(new URL('../plugins/clarcade-chat/server.mjs', import.meta.url)),
+    '--loopback', '--udp-port', String(daemon.port),
+  ], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+    env: { ...process.env, CLARCADE_CHAT_DATA_DIR: daemon.data,
+      PATH: [dirname(process.execPath), process.env.PATH].filter(Boolean).join(delimiter) },
+  })
+  const replies = createInterface({ input: server.stdout })[Symbol.asyncIterator]()
+  t.after(() => { server.stdin.end(); server.kill() })
+  let sequence = 0
+  async function rpc(method, params) {
+    const id = ++sequence
+    server.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
+    const reply = await replies.next()
+    assert.equal(reply.done, false, 'MCP server closed before answering')
+    const message = JSON.parse(reply.value)
+    assert.equal(message.id, id)
+    assert.equal(message.error, undefined)
+    return message.result
+  }
+  return { rpc, invoke: (name, args = {}) => rpc('tools/call', { name, arguments: args }) }
+}
+
+test('Chat MCP guest joins and plays with a direct invite when the discovery ports differ', { timeout: 20000 }, async t => {
+  const make = await fixture(t)
+  const host = make('code')
+  const guest = make('chat', host.port === 47979 ? 47980 : 47979)
+  await Promise.all([host.launch(), guest.launch()])
+  const created = await host.request('/host', { roomName: 'Chat preview', name: 'Code', visibility: 'private', pin: '0042' })
+  assert.equal(created.status, 200)
+  const { link, directLink, gameId } = created.body.room
+  const { rpc, invoke } = chatClient(t, guest)
+  assert.equal((await rpc('initialize', { protocolVersion: '2025-11-25' })).protocolVersion, '2025-11-25')
+  const { tools } = await rpc('tools/list')
+  const open = tools.find(tool => tool.name === 'open_clarcade')
+  assert(open?._meta.ui.resourceUri.startsWith('ui://'))
+  assert.deepEqual(tools.find(tool => tool.name === 'play_move')._meta.ui.visibility, ['app'])
+  const view = (await rpc('resources/read', { uri: open._meta.ui.resourceUri })).contents[0]
+  assert.equal(view.mimeType, 'text/html;profile=mcp-app')
+  assert.match(view.text, /ui\/initialize/)
+  assert.equal((await invoke('get_state')).structuredContent.room, null)
+  const unresolved = await invoke('join_room', { link, name: 'Free', pin: '0042' })
+  assert.equal(unresolved.isError, true)
+  assert.equal(unresolved.structuredContent.reason, 'room-not-found')
+  const incorrect = await invoke('join_room', { link: directLink, name: 'Free', pin: '0043' })
+  assert.equal(incorrect.isError, true)
+  assert.equal(incorrect.structuredContent.reason, 'wrong-pin')
+  const { room, version } = (await invoke('join_room', { link: directLink, name: 'Free', pin: '0042' })).structuredContent
+  assert.equal(room.gameId, gameId)
+  assert.equal(room.mark, 'O')
+  assert(!Object.hasOwn(room, 'directLink'))
+  assert.equal((await invoke('get_state', { version })).structuredContent.unchanged, true)
+  assert.equal((await host.request('/move', { gameId, moveNo: 1, moveEpoch: 0, x: 0, y: 0 })).status, 200)
+  const afterHostMove = await until(() => invoke('get_state', { version }), result =>
+    result.structuredContent.room?.boardVersion === 1)
+  assert.deepEqual(afterHostMove.structuredContent.room.moves.map(({ x, y, mark }) => ({ x, y, mark })),
+    [{ x: 0, y: 0, mark: 'X' }])
+  const played = await invoke('play_move', { gameId, moveNo: 2, moveEpoch: 0, x: 1, y: 0 })
+  assert.equal(played.structuredContent.ok, true)
+  assert.equal((await host.request('/state')).body.room.moves.at(-1).mark, 'O')
+  const stale = await invoke('play_move', { gameId, moveNo: 2, moveEpoch: 0, x: 2, y: 0 })
+  assert.equal(stale.isError, true)
+  assert.equal((await host.request('/state')).body.room.boardVersion, 2)
+})
+
+test('two Chat clients host, join by direct link, play, reopen and rematch', { timeout: 20000 }, async t => {
+  const make = await fixture(t)
+  const host = make('host')
+  const guest = make('guest')
+  await Promise.all([host.launch(), guest.launch()])
+  const first = chatClient(t, host)
+  const second = chatClient(t, guest)
+  const settings = { name: 'An', roomName: 'Caro Free', visibility: 'private' }
+  const tools = (await first.rpc('tools/list')).tools
+  assert.deepEqual(tools.find(tool => tool.name === 'host_room')?._meta.ui.visibility, ['app'])
+  assert.equal((await first.invoke('host_room', settings)).structuredContent.reason, 'invalid-pin')
+  const created = await first.invoke('host_room', { ...settings, pin: '0042' })
+  assert.equal(created.isError, undefined)
+  const { role, directLink, link, gameId, status } = created.structuredContent.room
+  assert.equal(role, 'host')
+  assert.equal(status, 'waiting')
+  assert.match(directLink, /^clarcade:\/\/j\/[A-Z0-9]{6}@127\.0\.0\.1:\d+$/)
+  assert.equal(directLink.split('@')[0], link)
+  assert.doesNotMatch(JSON.stringify(created), /"(?:pin|pinHash|token|playerId)"\s*:/)
+  assert.equal((await first.invoke('host_room', { ...settings, pin: '0042' })).structuredContent.reason, 'room-active')
+  const joins = { link: directLink, name: 'Binh' }
+  assert.equal((await second.invoke('join_room', { ...joins, pin: '0043' })).structuredContent.reason, 'wrong-pin')
+  const joined = (await second.invoke('join_room', { ...joins, pin: '0042' })).structuredContent.room
+  assert.equal(joined.gameId, gameId)
+  assert.equal(joined.role, 'guest')
+  assert.equal(joined.mark, 'O')
+  assert.equal((await first.invoke('get_state')).structuredContent.room.directLink, undefined)
+  assert.equal((await first.invoke('play_move', { gameId, moveNo: 1, moveEpoch: 0, x: -7, y: -7 })).structuredContent.ok, true)
+  await until(() => second.invoke('get_state'), result => result.structuredContent.room?.boardVersion === 1)
+  assert.equal((await second.invoke('play_move', { gameId, moveNo: 2, moveEpoch: 0, x: 1, y: 0 })).structuredContent.ok, true)
+  const reopened = chatClient(t, host)
+  const current = (await reopened.invoke('get_state')).structuredContent.room
+  assert.deepEqual(current.moves.map(({ x, y, mark }) => ({ x, y, mark })), [
+    { x: -7, y: -7, mark: 'X' }, { x: 1, y: 0, mark: 'O' },
+  ])
+  assert.equal(current.gameId, gameId)
+  const ended = (await reopened.invoke('game_action', { gameId, action: 'resign' })).structuredContent.room
+  assert.equal(ended.won, false)
+  assert.deepEqual(ended.score, { you: 0, opponent: 1, draws: 0 })
+  const other = await until(() => second.invoke('get_state'), result => result.structuredContent.room?.status === 'finished')
+  assert.equal(other.structuredContent.room.won, true)
+  assert.deepEqual(other.structuredContent.room.score, { you: 1, opponent: 0, draws: 0 })
+  assert.equal((await reopened.invoke('rematch', { gameId })).structuredContent.room.rematchVoted, true)
+  await until(() => second.invoke('get_state'), result => result.structuredContent.room?.rematchOffered)
+  assert.equal((await second.invoke('rematch', { gameId })).structuredContent.ok, true)
+  const next = await until(() => reopened.invoke('get_state'), result => result.structuredContent.room?.gameId !== gameId)
+  assert.equal(next.structuredContent.room.boardVersion, 0)
+  assert.equal(next.structuredContent.room.mark, 'O')
+  const nextGame = next.structuredContent.room
+  await until(() => second.invoke('get_state'), result => result.structuredContent.room?.gameId === nextGame.gameId)
+  const opening = { gameId: nextGame.gameId, moveNo: 1, moveEpoch: nextGame.moveEpoch, x: 7, y: 7 }
+  assert.equal((await second.invoke('play_move', opening)).structuredContent.ok, true)
+  const observed = await until(() => reopened.invoke('get_state'), result => result.structuredContent.room?.boardVersion === 1)
+  assert.deepEqual(observed.structuredContent.room.moves.map(({ x, y, mark }) => ({ x, y, mark })), [{ x: 7, y: 7, mark: 'X' }])
+})
+
+test('opening a saved Chat room upgrades a daemon that still requires the first move at the center', { timeout: 20000 }, async t => {
+  const folder = await mkdtemp('/tmp/clarcade-old-')
+  t.after(() => rm(folder, { recursive: true, force: true }))
+  await cp(new URL('../plugins/clarcade/', import.meta.url), folder, { recursive: true })
+  const manifest = join(folder, '.claude-plugin', 'plugin.json')
+  await writeFile(manifest, JSON.stringify({ ...JSON.parse(await readFile(manifest, 'utf8')), version: '0.1.5' }))
+  const rules = join(folder, 'games', 'gomoku', 'rules.js')
+  await writeFile(rules, (await readFile(rules, 'utf8')).replace(
+    '  const key =',
+    "  if (!state.board.size && (x !== 0 || y !== 0)) return { ok: false, reason: 'first-move-origin' }\n  const key =",
+  ))
+  const oldLauncher = join(folder, 'helper', 'launch.mjs')
+  const make = await fixture(t)
+  const host = make('host')
+  const guest = make('guest')
+  const [old] = await Promise.all([host.launch(oldLauncher), guest.launch()])
+  const { body: { room } } = await host.request('/host', { roomName: 'Saved room', name: 'An' })
+  assert.equal((await guest.request('/join', { link: room.directLink, name: 'Binh' })).status, 200)
+  const opening = { gameId: room.gameId, moveNo: 1, moveEpoch: 0, x: -7, y: -7 }
+  assert.equal((await host.request('/move', opening)).body.reason, 'first-move-origin')
+
+  const chat = chatClient(t, host)
+  const reopened = await chat.invoke('get_state')
+  const { body: running } = await host.request('/health')
+  await host.launch(oldLauncher)
+  assert.notEqual(running.pid, old.pid)
+  assert.equal(reopened.structuredContent.room.gameId, room.gameId)
+  await until(() => chat.invoke('get_state'), result => result.structuredContent.room?.connection === 'connected')
+  assert.equal((await chat.invoke('play_move', opening)).structuredContent.ok, true)
+  const synced = await until(() => guest.request('/state'), result => result.body.room?.boardVersion === 1)
+  assert.equal(synced.body.room.moves[0].x, -7)
+})
+
+test('a Chat host is listed on the LAN and a Code guest can join by short or discovered direct link', { timeout: 20000 }, async t => {
+  const make = await fixture(t)
+  const host = make('host')
+  const guest = make('code')
+  await Promise.all([host.launch(), guest.launch()])
+  const chat = chatClient(t, host)
+  const settings = { name: 'An', roomName: 'Caro LAN', visibility: 'public' }
+  for (const useShortLink of [true, false]) {
+    const { room } = (await chat.invoke('host_room', settings)).structuredContent
+    const { body: { rooms } } = await guest.request('/rooms')
+    const found = rooms.find(candidate => candidate.roomCode === room.link.split('/').at(-1))
+    assert.equal(found?.roomName, settings.roomName)
+    const link = useShortLink ? room.link : `${room.link}@${found.address}:${found.port}`
+    assert.equal((await guest.request('/join', { link, name: 'Binh' })).body.room.gameId, room.gameId)
+    assert.equal((await chat.invoke('leave_room', { gameId: room.gameId })).structuredContent.room, null)
+    await until(() => guest.request('/state'), result => result.body.room === null)
+  }
 })
 
 test('guest requests a fresh snapshot for a missing part and a bad digest', { timeout: 20000 }, async t => {

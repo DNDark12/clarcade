@@ -7,6 +7,7 @@ import { basename, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { validPin } from '../clarcade/helper/pin.mjs'
 import { runtime } from '../clarcade/helper/runtime.mjs'
 import { parseLink } from '../clarcade/hooks/link.js'
 import { name as validName, validMove } from '../clarcade/helper/protocol.mjs'
@@ -21,20 +22,27 @@ const thread = `chat-${randomUUID()}`
 const uri = 'ui://clarcade-chat/board.html'
 const mimeType = 'text/html;profile=mcp-app'
 const resource = { uri, name: 'Clarcade board', mimeType }
-const html = readFileSync(new URL('./board.html', import.meta.url), 'utf8')
+const sourceManifest = new URL('./manifest.json', import.meta.url)
+const { version: appVersion } = JSON.parse(readFileSync(
+  existsSync(sourceManifest) ? sourceManifest : new URL('../manifest.json', import.meta.url), 'utf8'))
+const html = readFileSync(new URL('./board.html', import.meta.url), 'utf8').replace('__CLARCADE_CHAT_VERSION__', appVersion)
 const protocols = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
 const object = (properties = {}, required = []) => ({ type: 'object', properties, required, additionalProperties: false })
 const string = { type: 'string' }
 const integer = { type: 'integer' }
+const visibilities = ['public', 'private']
 const privateTool = { ui: { visibility: ['app'] } }
 const tools = [
-  { name: 'open_clarcade', title: 'Open Clarcade', description: 'Open the Caro / Gomoku board to join a LAN match.',
+  { name: 'open_clarcade', title: 'Open Clarcade', description: 'Open the Caro / Gomoku board to host or join a LAN match.',
     inputSchema: object(), annotations: { readOnlyHint: true }, _meta: { ui: { resourceUri: uri } } },
+  { name: 'host_room', description: 'Create a LAN room from the board.',
+    inputSchema: object({ roomName: string, name: string, visibility: { type: 'string', enum: visibilities }, pin: string },
+      ['roomName', 'name', 'visibility']), _meta: privateTool },
   { name: 'join_room', description: 'Join a LAN match from the board using the invitation text and optional room PIN.',
     inputSchema: object({ link: string, name: string, pin: string }, ['link', 'name']), _meta: privateTool },
   { name: 'get_state', description: 'Read the current Clarcade board revision.',
     inputSchema: object({ version: string }), annotations: { readOnlyHint: true }, _meta: privateTool },
-  { name: 'play_move', description: 'Place the guest stone at the clicked coordinates.',
+  { name: 'play_move', description: 'Place your stone at the clicked coordinates.',
     inputSchema: object({ gameId: string, moveNo: integer, moveEpoch: integer, x: integer, y: integer },
       ['gameId', 'moveNo', 'moveEpoch', 'x', 'y']), _meta: privateTool },
   { name: 'rematch', description: 'Vote to play again after the game ends. A new game starts when both players vote.',
@@ -78,6 +86,7 @@ function daemon(path, body) {
 }
 
 let launching
+let daemonChecked = false
 let systemNode
 async function nodeForDaemon() {
   if (basename(process.execPath) === 'node') return process.execPath
@@ -98,29 +107,35 @@ async function nodeForDaemon() {
 
 function start() {
   launching ??= nodeForDaemon().then(node => execute(node, [launcher, ...args], { timeout: 8000 }))
+    .then(() => { daemonChecked = true })
     .finally(() => { launching = undefined })
   return launching
 }
 
-function guestSnapshot(snapshot) {
+function boardSnapshot(snapshot) {
   const { version, room } = snapshot
-  if (room?.role !== 'guest') return { version, room: null }
-  const { gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
+  if (!room) return { version, room: null }
+  const { role, gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
     pendingMove, winLine, finished, host, guest, rematchVotes = [], ruleset, turnMs = 0, turnEndsAt = null,
     moveLimit = 0, offer = null, score = null } = room
-  return { version, room: { gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
-    pendingMove: Boolean(pendingMove), winLine, finished,
-    hostName: host.name, guestName: guest?.name, won: finished?.winner === guest?.playerId,
-    // Who has asked for another game; it starts once both have.
-    rematchVoted: rematchVotes.includes(guest?.playerId), rematchOffered: rematchVotes.includes(host.playerId),
-    // The same in-game options as Clarcade in Claude Code.
+  const opponentRole = role === 'host' ? 'guest' : 'host'
+  const mine = room[role].playerId
+  const opponent = room[opponentRole]?.playerId
+  const invitation = role === 'host' && status === 'waiting' ?
+    { link: room.link, directLink: room.directLink, directLinks: room.directLinks, visibility: room.visibility } : {}
+  return { version, room: { role, gameId, roomName, boardSize, boardVersion, moveEpoch, moves, status, connection, mark, turn,
+    pendingMove: Boolean(pendingMove), winLine, finished: finished ? { draw: finished.winner === null } : null,
+    hostName: host.name, guestName: guest?.name, won: finished?.winner === mine,
+    rematchVoted: rematchVotes.includes(mine), rematchOffered: rematchVotes.includes(opponent),
     ruleset, turnMs, turnEndsAt, moveLimit, reason: finished?.reason ?? null,
-    offer: offer ? { id: offer.id, kind: offer.kind, mine: offer.playerId === guest?.playerId } : null,
-    // Games won in this room so far; an older daemon sends no score.
-    score: score ? { you: score.guest, opponent: score.host, draws: score.draws } : null } }
+    offer: offer ? { id: offer.id, kind: offer.kind, mine: offer.playerId === mine } : null,
+    score: score ? { you: score[role], opponent: score[opponentRole], draws: score.draws } : null,
+    ...invitation } }
 }
 
 async function state(version) {
+  // Reopening an existing game also checks the version of the detached daemon.
+  if (!daemonChecked && existsSync(join(dataDir, 'room.json'))) await start()
   const path = typeof version === 'string' && version.length <= 128 ? `/state?v=${encodeURIComponent(version)}` : '/state'
   let response
   try {
@@ -133,20 +148,29 @@ async function state(version) {
   }
   if (response.status === 204) return { unchanged: true }
   if (response.status !== 200) throw new Error('Daemon state unavailable')
-  return guestSnapshot(response.data)
+  return boardSnapshot(response.data)
 }
 
 async function call(name, input) {
   switch (name) {
     case 'open_clarcade':
-      return result({ ok: true }, 'Clarcade LAN board. Enter the invitation text in the board to join a game.')
+      return result({ ok: true }, 'Clarcade LAN board. Use the board to create a room or join with an invitation.')
     case 'get_state':
       return result(await state(input.version))
+    case 'host_room': {
+      const { roomName, name, visibility, pin } = input
+      if (!validName(name)) return failure('invalid-name')
+      if (!validName(roomName) || !visibilities.includes(visibility)) return failure('invalid-room')
+      if (visibility === 'private' && !validPin(pin)) return failure('invalid-pin')
+      await start()
+      const response = await daemon('/host', { roomName, name, visibility, ...(visibility === 'private' && { pin }) })
+      return response.status === 200 ? result(await state()) : failure(response.data?.reason ?? 'host-failed')
+    }
     case 'join_room': {
       const { link, name: guestName, pin } = input
       if (!parseLink(link)) return failure('invalid-link')
       if (!validName(guestName)) return failure('invalid-name')
-      if (pin !== undefined && (typeof pin !== 'string' || !/^\d{4,6}$/.test(pin))) return failure('invalid-pin')
+      if (pin !== undefined && !validPin(pin)) return failure('invalid-pin')
       await start()
       const response = await daemon('/join', { link, name: guestName, pin })
       return response.status === 200 ? result(await state()) : failure(response.data?.reason ?? 'join-failed')
@@ -204,7 +228,7 @@ async function handle({ id, method, params = {} }) {
   switch (method) {
     case 'initialize':
       payload = { protocolVersion: protocols.includes(params.protocolVersion) ? params.protocolVersion : protocols[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat', version: '0.1.5' } }
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'clarcade-chat', version: appVersion } }
       break
     case 'ping': payload = {}; break
     case 'tools/list': payload = { tools }; break

@@ -1,6 +1,6 @@
 # Clarcade
 
-Two-player Caro (Gomoku) on your LAN, inside Claude Code, while your agents work. Without Claude Code (for example on the Free plan), you can still join a game from the Chat tab of Claude Desktop with the [Chat extension](#play-from-claude-desktop-chat-without-claude-code). No internet, no external server and no npm dependencies. Each game runs in a background process on your machine, so it survives closing the pane, switching threads and reloading the mod.
+Two-player Caro (Gomoku) on your LAN, inside Claude Code, while your agents work. Two players on the Free plan can host and join from the Chat tab of Claude Desktop with the [Chat extension](#play-from-claude-desktop-chat-without-claude-code). No external game server and no npm dependencies. Each game runs in a background process on your machine, so it survives closing the pane, switching threads and reloading the mod.
 
 ## Features
 
@@ -48,7 +48,7 @@ After installation, start a new Claude Code session and run `/clarcade`. The fir
 
 ### Updates
 
-Clarcade updates itself. A few seconds after each Claude Code session starts (skipping a session within 10 minutes of the last check), it refreshes its marketplace and installs a newer version with the Claude Code CLI, the same two commands as below. It skips the check while a game is being played and when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. When a new version is installed, a toast asks you to restart Claude Code to load it.
+Clarcade updates itself. A few seconds after each Claude Code session starts (skipping a session within 10 minutes of the last check), it refreshes its marketplace and installs a newer version with the Claude Code CLI, the same two commands as below. It skips the check while a game is being played and when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. When a new version is installed, a toast asks you to restart Claude Code to load it. In the Claude desktop app, the check runs when a Code session opens; versions before 0.1.10 did not check there, so update those once by hand.
 
 Turn this off in **Settings → Update automatically**, or update at once with **Update now** or `/clarcade update`. If your installed version does not offer these options, run both commands in a terminal:
 
@@ -68,8 +68,8 @@ Start a new Code session after updating. Run `claude plugin list` in a terminal 
 
 | | |
 |---|---|
-| What it can do | **Join** a room and play: request an undo or a draw, answer the host's requests, resign, play again. The board shows the score of the games played in the room so far, and the turn clock and move limit when the room uses them. Someone using Clarcade in Claude Code creates the room |
-| What it cannot do | Create rooms, statistics, settings, turn notifications |
+| What it can do | **Create** public or PIN-protected rooms, **Join** by invitation, request an undo or a draw, resign and play again. The board shows the room score, and the turn clock and move limit when the room uses them |
+| Claude Code extras | LAN room list, statistics, settings and turn notifications |
 | Language | English, or Vietnamese when Claude Desktop is set to Vietnamese |
 | App | Claude Desktop on macOS. Not the web or mobile app |
 | Node.js | 22 or later installed on the machine (`node` on PATH, `/opt/homebrew/bin/node` or `/usr/local/bin/node`) |
@@ -85,9 +85,12 @@ Start a new Code session after updating. Run `claude plugin list` in a terminal 
 
 1. Start a new chat. In the **+** menu, open **Connectors** and check that **Clarcade** is on.
 2. Send a short message such as `Open Clarcade` (or `Mở Clarcade`). Claude opens the board in its reply. If Claude asks for permission, choose **Always allow** so later games open without the prompt.
-3. Paste the invitation link from the host (`clarcade://j/…`), enter your name and, for a private room, the PIN. Press **Join**.
-4. Click a cell to place your stone. **Expand** shows the board full screen, **Leave** leaves the room.
-5. When the game ends, press **Play again**. The next game starts once the host also agrees, and the first player alternates.
+3. To host from Chat, select **Create room**, enter your name and a room name, then create the room. Use **Copy link** to send the direct invitation to the other player. For a private room, send the PIN separately.
+4. To join, paste the invitation link (`clarcade://j/…`), enter your name and, for a private room, the PIN. Press **Join**.
+5. Click a cell to place your stone. **Expand** shows the board full screen, **Leave** leaves the room.
+6. When the game ends, press **Play again**. The next game starts once both players agree, and the first player alternates.
+
+The first move can be on any empty cell. Both players need Clarcade for Chat 0.1.4 or later, or the Claude Code plugin 0.1.8 or later, to play and sync an opening move away from the center.
 
 ### Open it again without typing
 
@@ -107,7 +110,7 @@ From version 0.1.3 the extension updates itself. Each time Claude Desktop starts
 - Updates come only from releases of this repository. Your name and game data are never sent.
 - Installing a newer `.mcpb` by hand still works, and the newer of the two copies runs.
 
-One manual step is left: if you have 0.1.2 or the 0.1.1 preview, install 0.1.3 by hand once. For 0.1.1, uninstall **Clarcade Chat Preview** first.
+If you have 0.1.2 or the 0.1.1 preview, install the latest bundle by hand once. For 0.1.1, uninstall **Clarcade Chat Preview** first.
 
 ### Data and uninstalling
 
@@ -123,7 +126,7 @@ The extension keeps its data in `~/.clarcade-chat-preview`, separate from the Cl
 
 When the guest joins, an open host pane switches from the waiting screen to the board. The first player can place the first stone on any cell. If you closed the pane, run `/clarcade` again to see the current board.
 
-If the other player cannot find the room, open **Connection help**, select your LAN address and press **Copy link**. The resulting link connects straight to your machine.
+**Copy link** includes a LAN address when one is available, so the guest can connect even when UDP discovery is blocked or the discovery ports differ. If your machine has several addresses, open **Connection help** and choose the address on the network both players use. The **Short link (LAN discovery)** option requires working UDP discovery and matching discovery ports.
 
 ### Join a room
 
@@ -180,7 +183,7 @@ Changes to the discovery port, Tailscale or IPv6 ULA apply right away when no ro
 ## Network, security and privacy
 
 - Clarcade only accepts private LAN addresses: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `169.254.0.0/16`. Tailscale and IPv6 ULA must be enabled separately.
-- Room discovery uses multicast `239.255.67.75` and broadcast on UDP port 47979. The host accepts TCP connections on a port chosen by the operating system. If macOS asks whether Node may accept incoming connections, choose **Allow**.
+- Room discovery uses multicast `239.255.67.75` and both local and subnet-specific broadcast on UDP port 47979 by default. The room list, room-name search and short links require UDP between the devices. The direct invitation uses TCP on a port chosen by the operating system. If macOS asks whether Node may accept incoming connections, choose **Allow**.
 - **Traffic between the two machines is not encrypted.** Anyone else on the network can read moves, player names and the PIN of a private room, and could pose as the host to a reconnecting guest. Only play on networks you trust, and never reuse a PIN that protects something else.
 - Wrong PINs are limited to 5 per minute per IP address, and an address is blocked from the room after 10. After 30 wrong PINs in total, the room stops accepting PINs and the host needs to create a new room.
 - Clarcade never sends your email or Claude account details. On macOS, the name field is prefilled with your full name from the system so you can change it before saving. Public rooms announce the host's name to every machine on the LAN.
@@ -214,7 +217,8 @@ Then uninstall the plugin with `/plugin uninstall clarcade@clarcade`.
 
 | Problem | What to do |
 |---|---|
-| The room does not show up | Check that both machines are on the same network and use the same discovery port. Open **Connection help**, select your LAN address and press **Copy link** if discovery fails |
+| The room does not show up or a short link fails | Use **Copy link** and share the link that includes the LAN address. To use the room list or short links, check that both machines use the same discovery port and that the network allows UDP discovery |
+| The first move only works at the center | Update Clarcade on both machines and restart Claude Desktop or the Claude Code session. The old **Clarcade Chat Preview** 0.1.1 needs a manual update |
 | The host still sees the waiting screen after the guest joins | Update the host to 0.1.6 or later. The board refreshes while statistics load |
 | Node cannot be found | Enter the absolute Node path in Settings → Advanced → Network, then press **Reconnect** |
 | Lost connection to the background process | Press **Reconnect**. If it keeps failing, check `daemon.log` |

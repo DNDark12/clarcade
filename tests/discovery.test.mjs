@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { createSocket } from 'node:dgram'
+import { networkInterfaces } from 'node:os'
 import test from 'node:test'
-import { DISCOVERY_SENDS_MS, DISCOVERY_WINDOW_MS, discover } from '../plugins/clarcade/helper/discovery.mjs'
+import { allowedAddress, DISCOVERY_SENDS_MS, DISCOVERY_WINDOW_MS, discover } from '../plugins/clarcade/helper/discovery.mjs'
 
 // A stand-in host on loopback that answers a code query for one room, and
 // can be told to ignore the first queries it gets, as a Wi-Fi link drops them.
@@ -43,4 +44,32 @@ test('repeated replies to the same query list the room once, and the search ends
 
 test('every send happens inside the search window', () => {
   assert.ok(DISCOVERY_SENDS_MS.every(at => at < DISCOVERY_WINDOW_MS - 300))
+})
+
+test('public lists and short invites reach a host on its subnet broadcast', async t => {
+  const iface = Object.values(networkInterfaces()).flat().find(item =>
+    item.family === 'IPv4' && !item.internal && allowedAddress(item.address) && Number(item.cidr?.split('/')[1]) < 31)
+  if (!iface) return t.skip('Needs a private IPv4 interface with a broadcast subnet')
+  const mask = iface.netmask.split('.').map(Number)
+  const broadcast = iface.address.split('.').map((part, i) => Number(part) | (255 ^ mask[i])).join('.')
+  const receiver = createSocket('udp4')
+  const sender = createSocket('udp4')
+  const bind = (socket, port, address) => new Promise((resolve, reject) => {
+    socket.once('error', reject)
+    socket.bind(port, address, resolve)
+  })
+  await bind(receiver, 0, broadcast)
+  t.after(() => receiver.close())
+  const { port: udpPort } = receiver.address()
+  await bind(sender, udpPort, iface.address)
+  t.after(() => sender.close())
+  receiver.on('message', (bytes, remote) => {
+    const { nonce } = JSON.parse(bytes.toString())
+    const reply = { magic: 'clarcade-lan', version: 1, type: 'here', nonce, roomCode: 'H3B0RX',
+      roomName: 'Subnet room', hostName: 'An', visibility: 'public', status: 'waiting', ruleset: 'freestyle', port: 58355 }
+    sender.send(JSON.stringify(reply), remote.port, remote.address)
+  })
+  const [listed, byCode] = await Promise.all([discover({ udpPort }), discover({ udpPort }, { roomCode: 'H3B0RX' })])
+  assert.deepEqual(listed.map(room => room.roomName), ['Subnet room'])
+  assert.deepEqual(byCode.map(room => room.address), [iface.address])
 })
